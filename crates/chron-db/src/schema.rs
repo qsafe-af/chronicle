@@ -39,6 +39,7 @@ impl SchemaManager {
         self.create_balance_changes_table(conn).await?;
         self.create_index_progress_table(conn).await?;
         self.create_account_stats_table(conn).await?;
+        self.create_metadata_table(conn).await?;
 
         // Create indexes
         self.create_indexes(conn).await?;
@@ -172,6 +173,32 @@ impl SchemaManager {
         Ok(())
     }
 
+    /// Create the metadata table for storing runtime versions
+    pub async fn create_metadata_table(&self, conn: &DbConnection) -> Result<()> {
+        let schema = self.schema_name();
+        let sql = format!(
+            r#"
+            CREATE TABLE IF NOT EXISTS {schema}.metadata (
+                spec_version INT PRIMARY KEY,
+                impl_version INT NOT NULL,
+                transaction_version INT NOT NULL,
+                state_version INT NOT NULL DEFAULT 0,
+                first_seen_block BIGINT NOT NULL,
+                last_seen_block BIGINT,
+                metadata_bytes BYTEA NOT NULL,
+                metadata_hash BYTEA NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            "#,
+            schema = schema
+        );
+
+        debug!("Creating metadata table");
+        conn.batch_execute(&sql).await?;
+        Ok(())
+    }
+
     /// Create indexes for better query performance
     pub async fn create_indexes(&self, conn: &DbConnection) -> Result<()> {
         let schema = self.schema_name();
@@ -191,6 +218,10 @@ impl SchemaManager {
             // Account stats indexes
             format!("CREATE INDEX IF NOT EXISTS idx_{}_account_stats_balance ON {schema}.account_stats (balance DESC)", self.chain_id),
             format!("CREATE INDEX IF NOT EXISTS idx_{}_account_stats_activity ON {schema}.account_stats (last_activity_block DESC)", self.chain_id),
+
+            // Metadata indexes
+            format!("CREATE INDEX IF NOT EXISTS idx_{}_metadata_block_range ON {schema}.metadata (first_seen_block, last_seen_block)", self.chain_id),
+            format!("CREATE INDEX IF NOT EXISTS idx_{}_metadata_hash ON {schema}.metadata (metadata_hash)", self.chain_id),
         ];
 
         debug!("Creating {} indexes", indexes.len());

@@ -5,3 +5,14 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+subxt = { version = "0.37", features = ["jsonrpsee", "substrate-compat"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parity-scale-codec = { version = "3", features = ["derive"] }
+hex = "0.4"

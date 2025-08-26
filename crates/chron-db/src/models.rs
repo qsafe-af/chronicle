@@ -223,3 +223,79 @@ pub struct IndexProgress {
     /// Last updated at
     pub updated_at: DateTime<Utc>,
 }
+
+/// Runtime metadata information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeMetadata {
+    /// Spec version of the runtime
+    pub spec_version: i32,
+    /// Implementation version of the runtime
+    pub impl_version: i32,
+    /// Transaction version of the runtime
+    pub transaction_version: i32,
+    /// State version of the runtime
+    pub state_version: i32,
+    /// First block where this runtime was seen
+    pub first_seen_block: i64,
+    /// Last block where this runtime was seen (None if still active)
+    pub last_seen_block: Option<i64>,
+    /// The actual metadata bytes (SCALE encoded)
+    pub metadata_bytes: Vec<u8>,
+    /// Hash of the metadata bytes for quick comparison
+    pub metadata_hash: Vec<u8>,
+    /// When this record was created
+    pub created_at: DateTime<Utc>,
+    /// When this record was last updated
+    pub updated_at: DateTime<Utc>,
+}
+
+impl RuntimeMetadata {
+    /// Create a new runtime metadata record
+    pub fn new(
+        spec_version: i32,
+        impl_version: i32,
+        transaction_version: i32,
+        state_version: i32,
+        first_seen_block: i64,
+        metadata_bytes: Vec<u8>,
+    ) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&metadata_bytes);
+        let metadata_hash = hasher.finalize().to_vec();
+
+        Self {
+            spec_version,
+            impl_version,
+            transaction_version,
+            state_version,
+            first_seen_block,
+            last_seen_block: None,
+            metadata_bytes,
+            metadata_hash,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// Get the metadata size in bytes
+    pub fn size(&self) -> usize {
+        self.metadata_bytes.len()
+    }
+
+    /// Get metadata hash as hex string
+    pub fn metadata_hash_hex(&self) -> String {
+        ::hex::encode(&self.metadata_hash)
+    }
+
+    /// Check if this runtime version is still active
+    pub fn is_active(&self) -> bool {
+        self.last_seen_block.is_none()
+    }
+
+    /// Update the last seen block
+    pub fn set_last_seen_block(&mut self, block: i64) {
+        self.last_seen_block = Some(block);
+        self.updated_at = Utc::now();
+    }
+}

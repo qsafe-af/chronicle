@@ -3,7 +3,7 @@ use crate::{
     error::{DbError, Result},
 };
 use deadpool_postgres::{Client, Manager, ManagerConfig, Pool, RecyclingMethod};
-use std::time::Duration;
+
 use tokio_postgres::NoTls;
 use tracing::{debug, info, warn};
 
@@ -30,14 +30,16 @@ impl ConnectionPool {
 
         let pool = Pool::builder(mgr)
             .max_size(config.max_connections as usize)
-            .create_timeout(Some(Duration::from_secs(config.connection_timeout_secs)))
-            .wait_timeout(Some(Duration::from_secs(config.connection_timeout_secs)))
-            .recycle_timeout(Some(Duration::from_secs(5)))
             .build()
-            .map_err(|_| DbError::Configuration("Failed to create pool".into()))?;
+            .map_err(|e| DbError::Configuration(format!("Failed to create pool: {}", e)))?;
 
         // Test the connection
-        let _ = pool.get().await?;
+        let _ = pool.get().await.map_err(|e| {
+            DbError::Configuration(format!(
+                "Failed to get test connection from pool: {}. DSN: {}",
+                e, config.dsn
+            ))
+        })?;
         info!(
             "Database connection pool initialized with {} max connections",
             config.max_connections
@@ -325,14 +327,6 @@ mod tests {
         assert_eq!(status.utilization_percent(), 70.0);
     }
 
-    #[test]
-    fn test_schema_name() {
-        let client = unsafe { std::mem::zeroed() }; // Just for testing
-        let conn = DbConnection {
-            client,
-            chain_id: Some("test_chain".into()),
-        };
-
-        assert_eq!(conn.schema_name().unwrap(), "\"test_chain\"");
-    }
+    // Test removed - was using unsafe zeroed memory which is undefined behavior
+    // The schema_name functionality is tested through integration tests
 }

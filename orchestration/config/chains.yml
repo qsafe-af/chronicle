@@ -1,0 +1,12 @@
+---
+chains:
+  - id: heisenberg
+    endpoint: wss://a.i.res.fm
+    genesis:
+      hash: "0x67391d3f740ef644c4dc91c9004af18fb4b41a6ead0719a06ccfbca50f27b015"
+      base58: 7wwWHpnmxRf1Cnvri1cQ6LUiwvDw1czPjL7ytnoxNNNg
+  - id: resonance
+    endpoint: wss://a.t.res.fm
+    genesis:
+      hash: "0xdbacc01ae41b79388135ccd5d0ebe81eb0905260344256e6f4003bb8e75a91b5"
+      base58: FnX4ttSwm8kTZUvUkDbyPYS2txtcrW5pZ7kATWar2v1i

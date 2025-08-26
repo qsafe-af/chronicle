@@ -1,7 +1,9 @@
 use crate::{
     connection::DbConnection,
     error::{DbError, Result},
-    models::{AccountStats, BalanceChange, BalanceChangeReason, Block, IndexProgress},
+    models::{
+        AccountStats, BalanceChange, BalanceChangeReason, Block, IndexProgress, RuntimeMetadata,
+    },
 };
 use chrono::Utc;
 use tracing::info;
@@ -546,5 +548,216 @@ impl<'a> ChainRepository<'a> {
         self.update_progress(&progress).await?;
 
         Ok(())
+    }
+}
+
+/// Repository for managing runtime metadata
+pub struct RuntimeMetadataRepository<'a> {
+    conn: &'a DbConnection,
+}
+
+impl<'a> RuntimeMetadataRepository<'a> {
+    /// Create a new runtime metadata repository
+    pub fn new(conn: &'a DbConnection) -> Self {
+        Self { conn }
+    }
+
+    /// Insert or update runtime metadata
+    pub async fn upsert(&self, metadata: &RuntimeMetadata) -> Result<()> {
+        let schema = self.conn.schema_name()?;
+        let sql = format!(
+            r#"
+            INSERT INTO {schema}.metadata
+            (spec_version, impl_version, transaction_version, state_version,
+             first_seen_block, last_seen_block, metadata_bytes, metadata_hash, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (spec_version) DO UPDATE SET
+                last_seen_block = EXCLUDED.last_seen_block,
+                updated_at = EXCLUDED.updated_at
+            "#,
+            schema = schema
+        );
+
+        self.conn
+            .execute(
+                &sql,
+                &[
+                    &metadata.spec_version,
+                    &metadata.impl_version,
+                    &metadata.transaction_version,
+                    &metadata.state_version,
+                    &metadata.first_seen_block,
+                    &metadata.last_seen_block,
+                    &metadata.metadata_bytes,
+                    &metadata.metadata_hash,
+                    &metadata.created_at,
+                    &metadata.updated_at,
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Get metadata by spec version
+    pub async fn get_by_version(&self, spec_version: i32) -> Result<Option<RuntimeMetadata>> {
+        let schema = self.conn.schema_name()?;
+        let sql = format!(
+            r#"
+            SELECT spec_version, impl_version, transaction_version, state_version,
+                   first_seen_block, last_seen_block, metadata_bytes, metadata_hash, created_at, updated_at
+            FROM {schema}.metadata
+            WHERE spec_version = $1
+            "#,
+            schema = schema
+        );
+
+        match self.conn.query_opt(&sql, &[&spec_version]).await? {
+            Some(row) => Ok(Some(RuntimeMetadata {
+                spec_version: row.get(0),
+                impl_version: row.get(1),
+                transaction_version: row.get(2),
+                state_version: row.get(3),
+                first_seen_block: row.get(4),
+                last_seen_block: row.get(5),
+                metadata_bytes: row.get(6),
+                metadata_hash: row.get(7),
+                created_at: row.get(8),
+                updated_at: row.get(9),
+            })),
+            None => Ok(None),
+        }
+    }
+
+    /// Get metadata for a specific block number
+    pub async fn get_for_block(&self, block_number: i64) -> Result<Option<RuntimeMetadata>> {
+        let schema = self.conn.schema_name()?;
+        let sql = format!(
+            r#"
+            SELECT spec_version, impl_version, transaction_version, state_version,
+                   first_seen_block, last_seen_block, metadata_bytes, metadata_hash, created_at, updated_at
+            FROM {schema}.metadata
+            WHERE first_seen_block <= $1
+              AND (last_seen_block IS NULL OR last_seen_block >= $1)
+            ORDER BY spec_version DESC
+            LIMIT 1
+            "#,
+            schema = schema
+        );
+
+        match self.conn.query_opt(&sql, &[&block_number]).await? {
+            Some(row) => Ok(Some(RuntimeMetadata {
+                spec_version: row.get(0),
+                impl_version: row.get(1),
+                transaction_version: row.get(2),
+                state_version: row.get(3),
+                first_seen_block: row.get(4),
+                last_seen_block: row.get(5),
+                metadata_bytes: row.get(6),
+                metadata_hash: row.get(7),
+                created_at: row.get(8),
+                updated_at: row.get(9),
+            })),
+            None => Ok(None),
+        }
+    }
+
+    /// Update last seen block for a runtime version
+    pub async fn update_last_seen_block(
+        &self,
+        spec_version: i32,
+        last_seen_block: i64,
+    ) -> Result<()> {
+        let schema = self.conn.schema_name()?;
+        let sql = format!(
+            r#"
+            UPDATE {schema}.metadata
+            SET last_seen_block = $2, updated_at = NOW()
+            WHERE spec_version = $1
+            "#,
+            schema = schema
+        );
+
+        self.conn
+            .execute(&sql, &[&spec_version, &last_seen_block])
+            .await?;
+        Ok(())
+    }
+
+    /// Get all runtime versions
+    pub async fn get_all_versions(&self) -> Result<Vec<RuntimeMetadata>> {
+        let schema = self.conn.schema_name()?;
+        let sql = format!(
+            r#"
+            SELECT spec_version, impl_version, transaction_version, state_version,
+                   first_seen_block, last_seen_block, metadata_bytes, metadata_hash, created_at, updated_at
+            FROM {schema}.metadata
+            ORDER BY spec_version
+            "#,
+            schema = schema
+        );
+
+        let rows = self.conn.query(&sql, &[]).await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| RuntimeMetadata {
+                spec_version: row.get(0),
+                impl_version: row.get(1),
+                transaction_version: row.get(2),
+                state_version: row.get(3),
+                first_seen_block: row.get(4),
+                last_seen_block: row.get(5),
+                metadata_bytes: row.get(6),
+                metadata_hash: row.get(7),
+                created_at: row.get(8),
+                updated_at: row.get(9),
+            })
+            .collect())
+    }
+
+    /// Check if a runtime version exists
+    pub async fn exists(&self, spec_version: i32) -> Result<bool> {
+        let schema = self.conn.schema_name()?;
+        let sql = format!(
+            "SELECT EXISTS (SELECT 1 FROM {schema}.metadata WHERE spec_version = $1)",
+            schema = schema
+        );
+
+        let row = self.conn.query_one(&sql, &[&spec_version]).await?;
+        Ok(row.get(0))
+    }
+
+    /// Get the latest (current) runtime metadata
+    pub async fn get_latest(&self) -> Result<Option<RuntimeMetadata>> {
+        let schema = self.conn.schema_name()?;
+        let sql = format!(
+            r#"
+            SELECT spec_version, impl_version, transaction_version, state_version,
+                   first_seen_block, last_seen_block, metadata_bytes, metadata_hash, created_at, updated_at
+            FROM {schema}.metadata
+            WHERE last_seen_block IS NULL
+               OR last_seen_block = (SELECT MAX(last_seen_block) FROM {schema}.metadata)
+            ORDER BY spec_version DESC
+            LIMIT 1
+            "#,
+            schema = schema
+        );
+
+        match self.conn.query_opt(&sql, &[]).await? {
+            Some(row) => Ok(Some(RuntimeMetadata {
+                spec_version: row.get(0),
+                impl_version: row.get(1),
+                transaction_version: row.get(2),
+                state_version: row.get(3),
+                first_seen_block: row.get(4),
+                last_seen_block: row.get(5),
+                metadata_bytes: row.get(6),
+                metadata_hash: row.get(7),
+                created_at: row.get(8),
+                updated_at: row.get(9),
+            })),
+            None => Ok(None),
+        }
     }
 }
