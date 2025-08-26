@@ -1,14 +1,16 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+mod config;
+mod connection;
+mod error;
+mod models;
+mod repository;
+mod schema;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub use config::DbConfig;
+pub use connection::{ConnectionPool, DbConnection, TransactionWrapper};
+pub use error::{DbError, Result};
+pub use models::{AccountStats, BalanceChange, BalanceChangeReason, Block, IndexProgress};
+pub use repository::{BalanceChangeRepository, BlockRepository, ChainRepository};
+pub use schema::SchemaManager;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// Re-export commonly used types
+pub use deadpool_postgres::Transaction;
