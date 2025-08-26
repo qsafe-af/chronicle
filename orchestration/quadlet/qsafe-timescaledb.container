@@ -1,0 +1,14 @@
+[Unit]
+Description=qsafe timescaledb
+
+[Container]
+Image=timescale/timescaledb:latest-pg16
+PublishPort=5432:5432
+Volume=qsafe-timescaledb-data:/var/lib/qsafe/data
+Environment=POSTGRES_DB=qsafe_chain_index
+Environment=POSTGRES_USER=qsafe
+Environment=POSTGRES_PASSWORD=password
+Restart=always
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,65 @@
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.fleet/
+.history
+tags
+
+# --- Rust / Cargo ---
+/target/
+**/target/
+# keep Cargo.lock for reproducible builds (workspace/binaries)
+# !Cargo.lock
+
+# llvm/profile & coverage artifacts
+*.profraw
+*.profdata
+coverage/
+
+# --- Python helpers (scripts/) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+pip-wheel-metadata/
+*.egg-info/
+
+# --- Node (just in case you add tooling later) ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Hasura CLI / console (keep metadata & migrations tracked) ---
+hasura/.hasura/
+hasura/.env
+hasura/console/
+hasura/cli-ext/
+
+# --- Orchestration / Quadlets ---
+# per-chain env files (contain secrets)
+orchestration/config/*.env
+orchestration/config/*.secret
+orchestration/config/*.secrets
+orchestration/config/*-local.*
+orchestration/config/*-override.*
+# allow checked-in samples
+!orchestration/config/*.env.sample
+!orchestration/config/*.env.example
+
+# optional host-bind data dirs if you ever mount instead of named volumes
+orchestration/**/pgdata/
+orchestration/**/timescaledb-data/
+orchestration/**/data/
+orchestration/**/logs/
+
+# --- General env files at repo root (if you create any) ---
+# (prefer putting chain-specific envs under orchestration/config)
+.env
+.env.local
+.envrc

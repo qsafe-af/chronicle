@@ -1,0 +1,13 @@
+[Unit]
+Description=qsafe graphql engine
+
+[Container]
+Image=hasura/graphql-engine:v2.39.0
+PublishPort=8080:8080
+Environment=HASURA_GRAPHQL_DATABASE_URL=postgres://qsafe:password@127.0.0.1:5432/qsafe_chain_index
+Environment=HASURA_GRAPHQL_ENABLE_CONSOLE=true
+Environment=HASURA_GRAPHQL_DEV_MODE=true
+Restart=always
+
+[Install]
+WantedBy=default.target
