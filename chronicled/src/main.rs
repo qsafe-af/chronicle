@@ -36,8 +36,9 @@ async fn main() -> Result<()> {
 
     // Connect to the blockchain
     info!("Connecting to blockchain at {}", ws_url);
+    let rpc_client = RpcClient::from_url(&ws_url).await?;
     let client: OnlineClient<PolkadotConfig> =
-        OnlineClient::from_rpc_client(RpcClient::from_url(&ws_url).await?).await?;
+        OnlineClient::from_rpc_client(rpc_client.clone()).await?;
 
     // Compute chain ID from genesis hash
     let genesis_hash = client.genesis_hash();
@@ -140,6 +141,81 @@ async fn main() -> Result<()> {
         finality_confirmations
     );
 
+    let mut last_runtime_version: Option<u32> = None;
+
+    // Catch up on historical blocks before starting subscription
+    let current_best = client.blocks().at_latest().await?;
+    let current_best_number = current_best.number() as i64;
+
+    // Calculate the safe block to index up to (current - confirmations)
+    let safe_block_number = if follow_best {
+        (current_best_number - finality_confirmations as i64).max(0)
+    } else {
+        current_best_number
+    };
+
+    // Process any blocks we're behind on
+    if progress.latest_block < safe_block_number {
+        info!(
+            "Catching up from block {} to block {}",
+            progress.latest_block + 1,
+            safe_block_number
+        );
+
+        // Process historical blocks using subxt's legacy RPC methods
+        use subxt::backend::legacy::rpc_methods::NumberOrHex;
+        use subxt::backend::legacy::LegacyRpcMethods;
+        let legacy_rpc = LegacyRpcMethods::<PolkadotConfig>::new(rpc_client.clone());
+
+        // Process historical blocks using subxt's legacy RPC methods
+        for block_num in (progress.latest_block + 1)..=safe_block_number {
+            // Step 1: Get block hash using legacy RPC method
+            // Use NumberOrHex type as expected by the RPC method
+            let block_number = NumberOrHex::Number(block_num as u64);
+            let block_hash = match legacy_rpc.chain_get_block_hash(Some(block_number)).await? {
+                Some(hash) => hash,
+                None => {
+                    warn!("No block hash found for block #{}", block_num);
+                    continue;
+                }
+            };
+
+            // Step 3: Fetch the block using the hash
+            match client.blocks().at(block_hash).await {
+                Ok(block) => {
+                    info!(
+                        "Processing historical block #{} ({})",
+                        block_num,
+                        hex::encode(&block_hash)
+                    );
+
+                    process_block(
+                        &client,
+                        &pool,
+                        &chain_id,
+                        &decoder,
+                        block,
+                        &mut progress,
+                        &mut last_runtime_version,
+                    )
+                    .await?;
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to fetch block #{} at hash {}: {}",
+                        block_num,
+                        hex::encode(&block_hash),
+                        e
+                    );
+                    // Continue with next block instead of failing completely
+                    continue;
+                }
+            }
+        }
+
+        info!("Finished catching up to block {}", safe_block_number);
+    }
+
     // Main indexing loop - use best blocks for PoW chains
     let mut block_sub = if follow_best {
         info!("Following best blocks (PoW mode)");
@@ -148,8 +224,6 @@ async fn main() -> Result<()> {
         info!("Following finalized blocks (instant finality mode)");
         client.blocks().subscribe_finalized().await?
     };
-
-    let mut last_runtime_version: Option<u32> = None;
     let mut pending_blocks: std::collections::BTreeMap<i64, [u8; 32]> =
         std::collections::BTreeMap::new();
 

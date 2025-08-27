@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chron_db::BalanceChange;
+use chron_db::{BalanceChange, BalanceChangeReason};
 use chrono::{DateTime, Utc};
 use subxt::{
     events::{EventDetails, Events},
@@ -150,23 +150,92 @@ impl BalanceDecoder {
         &self,
         event: &EventDetails<PolkadotConfig>,
         block_number: i64,
-        _event_index: i32,
-        _block_timestamp: DateTime<Utc>,
-        _extrinsic_hash: Option<Vec<u8>>,
+        event_index: i32,
+        block_timestamp: DateTime<Utc>,
+        extrinsic_hash: Option<Vec<u8>>,
     ) -> Result<Vec<BalanceChange>> {
-        let changes = Vec::new();
+        use subxt::ext::scale_value::{Composite, Primitive, Value, ValueDef};
 
-        // Try to decode the event fields dynamically
-        // Transfer typically has: { from: AccountId, to: AccountId, amount: Balance }
-        let bytes = event.bytes();
+        let decoded = event.as_root_event::<Value>()?;
+        let mut changes = Vec::new();
 
-        // For now, we'll log the event but not decode it fully
-        // In production, you'd use the metadata to properly decode these bytes
-        debug!(
-            "Transfer event at block {} (would decode {} bytes)",
-            block_number,
-            bytes.len()
-        );
+        // Transfer event structure: { from: AccountId, to: AccountId, amount: Balance }
+        if let ValueDef::Composite(Composite::Named(fields)) = &decoded.value {
+            let mut from_account: Option<Vec<u8>> = None;
+            let mut to_account: Option<Vec<u8>> = None;
+            let mut amount: Option<u128> = None;
+
+            for (name, value) in fields {
+                match name.as_str() {
+                    "from" => {
+                        if let ValueDef::Composite(Composite::Unnamed(vals)) = &value.value {
+                            if let Some(first_val) = vals.first() {
+                                if let ValueDef::Primitive(Primitive::U128(bytes)) =
+                                    &first_val.value
+                                {
+                                    from_account = Some(bytes.to_le_bytes().to_vec());
+                                }
+                            }
+                        }
+                    }
+                    "to" => {
+                        if let ValueDef::Composite(Composite::Unnamed(vals)) = &value.value {
+                            if let Some(first_val) = vals.first() {
+                                if let ValueDef::Primitive(Primitive::U128(bytes)) =
+                                    &first_val.value
+                                {
+                                    to_account = Some(bytes.to_le_bytes().to_vec());
+                                }
+                            }
+                        }
+                    }
+                    "amount" => {
+                        if let ValueDef::Primitive(Primitive::U128(val)) = &value.value {
+                            amount = Some(*val);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let (Some(from), Some(to), Some(amt)) = (from_account, to_account, amount) {
+                // Create negative balance change for sender
+                changes.push(BalanceChange {
+                    id: None,
+                    account: from.clone(),
+                    block_number,
+                    event_index,
+                    delta: (-(amt as i128)).to_string(),
+                    reason: BalanceChangeReason::Transfer,
+                    extrinsic_hash: extrinsic_hash.clone(),
+                    event_pallet: "Balances".to_string(),
+                    event_variant: "Transfer".to_string(),
+                    block_ts: block_timestamp,
+                });
+
+                // Create positive balance change for receiver
+                changes.push(BalanceChange {
+                    id: None,
+                    account: to.clone(),
+                    block_number,
+                    event_index: event_index + 1,
+                    delta: (amt as i128).to_string(),
+                    reason: BalanceChangeReason::Transfer,
+                    extrinsic_hash,
+                    event_pallet: "Balances".to_string(),
+                    event_variant: "Transfer".to_string(),
+                    block_ts: block_timestamp,
+                });
+
+                debug!(
+                    "Decoded Transfer at block {}: {} tokens from {} to {}",
+                    block_number,
+                    amt,
+                    hex::encode(&from),
+                    hex::encode(&to)
+                );
+            }
+        }
 
         Ok(changes)
     }
@@ -176,17 +245,63 @@ impl BalanceDecoder {
         &self,
         event: &EventDetails<PolkadotConfig>,
         block_number: i64,
-        _event_index: i32,
-        _block_timestamp: DateTime<Utc>,
-        _extrinsic_hash: Option<Vec<u8>>,
+        event_index: i32,
+        block_timestamp: DateTime<Utc>,
+        extrinsic_hash: Option<Vec<u8>>,
     ) -> Result<Vec<BalanceChange>> {
-        let bytes = event.bytes();
-        debug!(
-            "Endowed event at block {} (would decode {} bytes)",
-            block_number,
-            bytes.len()
-        );
-        Ok(vec![])
+        use subxt::ext::scale_value::{Composite, Primitive, Value, ValueDef};
+
+        // Decode the event dynamically
+        let decoded = event.as_root_event::<Value>()?;
+
+        let mut changes = Vec::new();
+
+        // Endowed event structure: { account: AccountId, free_balance: Balance }
+        if let ValueDef::Composite(Composite::Named(fields)) = &decoded.value {
+            let mut account: Option<Vec<u8>> = None;
+            let mut balance: Option<i128> = None;
+
+            for (name, value) in fields {
+                match name.as_str() {
+                    "account" => {
+                        if let ValueDef::Composite(Composite::Unnamed(vals)) = &value.value {
+                            if let Some(first_val) = vals.first() {
+                                if let ValueDef::Primitive(Primitive::U128(bytes)) =
+                                    &first_val.value
+                                {
+                                    account = Some(bytes.to_le_bytes().to_vec());
+                                }
+                            }
+                        }
+                    }
+                    "free_balance" => {
+                        if let ValueDef::Primitive(Primitive::U128(val)) = &value.value {
+                            balance = Some(*val as i128);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let (Some(acc), Some(bal)) = (account, balance) {
+                changes.push(BalanceChange {
+                    id: None,
+                    account: acc,
+                    block_number,
+                    event_index,
+                    delta: bal.to_string(),
+                    reason: BalanceChangeReason::Endowment,
+                    extrinsic_hash,
+                    event_pallet: "Balances".to_string(),
+                    event_variant: "Endowed".to_string(),
+                    block_ts: block_timestamp,
+                });
+
+                debug!("Decoded Endowed at block {}: {} tokens", block_number, bal);
+            }
+        }
+
+        Ok(changes)
     }
 
     /// Decode a Deposit event
@@ -194,17 +309,61 @@ impl BalanceDecoder {
         &self,
         event: &EventDetails<PolkadotConfig>,
         block_number: i64,
-        _event_index: i32,
-        _block_timestamp: DateTime<Utc>,
-        _extrinsic_hash: Option<Vec<u8>>,
+        event_index: i32,
+        block_timestamp: DateTime<Utc>,
+        extrinsic_hash: Option<Vec<u8>>,
     ) -> Result<Vec<BalanceChange>> {
-        let bytes = event.bytes();
-        debug!(
-            "Deposit event at block {} (would decode {} bytes)",
-            block_number,
-            bytes.len()
-        );
-        Ok(vec![])
+        use subxt::ext::scale_value::{Composite, Primitive, Value, ValueDef};
+
+        let decoded = event.as_root_event::<Value>()?;
+        let mut changes = Vec::new();
+
+        // Deposit event structure: { who: AccountId, amount: Balance }
+        if let ValueDef::Composite(Composite::Named(fields)) = &decoded.value {
+            let mut account: Option<Vec<u8>> = None;
+            let mut amount: Option<i128> = None;
+
+            for (name, value) in fields {
+                match name.as_str() {
+                    "who" => {
+                        if let ValueDef::Composite(Composite::Unnamed(vals)) = &value.value {
+                            if let Some(first_val) = vals.first() {
+                                if let ValueDef::Primitive(Primitive::U128(bytes)) =
+                                    &first_val.value
+                                {
+                                    account = Some(bytes.to_le_bytes().to_vec());
+                                }
+                            }
+                        }
+                    }
+                    "amount" => {
+                        if let ValueDef::Primitive(Primitive::U128(val)) = &value.value {
+                            amount = Some(*val as i128);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let (Some(acc), Some(amt)) = (account, amount) {
+                changes.push(BalanceChange {
+                    id: None,
+                    account: acc,
+                    block_number,
+                    event_index,
+                    delta: amt.to_string(),
+                    reason: BalanceChangeReason::Deposit,
+                    extrinsic_hash,
+                    event_pallet: "Balances".to_string(),
+                    event_variant: "Deposit".to_string(),
+                    block_ts: block_timestamp,
+                });
+
+                debug!("Decoded Deposit at block {}: {} tokens", block_number, amt);
+            }
+        }
+
+        Ok(changes)
     }
 
     /// Decode a Withdraw event
@@ -212,17 +371,61 @@ impl BalanceDecoder {
         &self,
         event: &EventDetails<PolkadotConfig>,
         block_number: i64,
-        _event_index: i32,
-        _block_timestamp: DateTime<Utc>,
-        _extrinsic_hash: Option<Vec<u8>>,
+        event_index: i32,
+        block_timestamp: DateTime<Utc>,
+        extrinsic_hash: Option<Vec<u8>>,
     ) -> Result<Vec<BalanceChange>> {
-        let bytes = event.bytes();
-        debug!(
-            "Withdraw event at block {} (would decode {} bytes)",
-            block_number,
-            bytes.len()
-        );
-        Ok(vec![])
+        use subxt::ext::scale_value::{Composite, Primitive, Value, ValueDef};
+
+        let decoded = event.as_root_event::<Value>()?;
+        let mut changes = Vec::new();
+
+        // Withdraw event structure: { who: AccountId, amount: Balance }
+        if let ValueDef::Composite(Composite::Named(fields)) = &decoded.value {
+            let mut account: Option<Vec<u8>> = None;
+            let mut amount: Option<i128> = None;
+
+            for (name, value) in fields {
+                match name.as_str() {
+                    "who" => {
+                        if let ValueDef::Composite(Composite::Unnamed(vals)) = &value.value {
+                            if let Some(first_val) = vals.first() {
+                                if let ValueDef::Primitive(Primitive::U128(bytes)) =
+                                    &first_val.value
+                                {
+                                    account = Some(bytes.to_le_bytes().to_vec());
+                                }
+                            }
+                        }
+                    }
+                    "amount" => {
+                        if let ValueDef::Primitive(Primitive::U128(val)) = &value.value {
+                            amount = Some(*val as i128);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let (Some(acc), Some(amt)) = (account, amount) {
+                changes.push(BalanceChange {
+                    id: None,
+                    account: acc,
+                    block_number,
+                    event_index,
+                    delta: (-(amt as i128)).to_string(), // Withdrawal is negative
+                    reason: BalanceChangeReason::Withdrawal,
+                    extrinsic_hash,
+                    event_pallet: "Balances".to_string(),
+                    event_variant: "Withdraw".to_string(),
+                    block_ts: block_timestamp,
+                });
+
+                debug!("Decoded Withdraw at block {}: {} tokens", block_number, amt);
+            }
+        }
+
+        Ok(changes)
     }
 
     /// Decode a Slashed event
