@@ -6,21 +6,24 @@ This directory contains scripts for deploying and testing Chronicle locally.
 
 ```bash
 # 1. Deploy TimescaleDB locally (run as root)
-sudo ./deploy-timescaledb.sh
+sudo ./deploy-timescaledb-podman.sh
 
-# 2. Run Chronicle with test configuration
+# 2. (Optional) Deploy Hasura GraphQL Engine for API access
+sudo ./deploy-hasura-podman.sh
+
+# 3. Run Chronicle with test configuration
 ./test-local.sh
 ```
 
 ## Scripts Overview
 
-### `deploy-timescaledb.sh`
+### `deploy-timescaledb-podman.sh`
 
-Deploys TimescaleDB as a Podman quadlet with a dedicated system user.
+Deploys TimescaleDB as a Podman container with a dedicated system user.
 
 **Features:**
 - Creates `qsafe` system user with home directory `/var/lib/qsafe`
-- Deploys TimescaleDB as a user systemd service (quadlet)
+- Deploys TimescaleDB as a Podman container with optional systemd service
 - Configures TimescaleDB for optimal performance
 - Sets up persistent storage
 - Enables automatic startup on boot
@@ -28,15 +31,18 @@ Deploys TimescaleDB as a Podman quadlet with a dedicated system user.
 **Usage:**
 ```bash
 # Deploy and start TimescaleDB
-sudo ./deploy-timescaledb.sh
+sudo ./deploy-timescaledb-podman.sh
 
 # Other commands
-sudo ./deploy-timescaledb.sh status    # Check service status
-sudo ./deploy-timescaledb.sh stop      # Stop the service
-sudo ./deploy-timescaledb.sh start     # Start the service
-sudo ./deploy-timescaledb.sh restart   # Restart the service
-sudo ./deploy-timescaledb.sh logs      # Follow service logs
-sudo ./deploy-timescaledb.sh uninstall # Remove service (preserves data)
+sudo ./deploy-timescaledb-podman.sh status    # Check service status
+sudo ./deploy-timescaledb-podman.sh stop      # Stop the container
+sudo ./deploy-timescaledb-podman.sh start     # Start the container
+sudo ./deploy-timescaledb-podman.sh restart   # Restart the container
+sudo ./deploy-timescaledb-podman.sh logs      # Follow container logs
+sudo ./deploy-timescaledb-podman.sh shell     # Open bash shell in container
+sudo ./deploy-timescaledb-podman.sh psql      # Open psql client
+sudo ./deploy-timescaledb-podman.sh remove    # Remove container (preserves data)
+sudo ./deploy-timescaledb-podman.sh purge     # Remove container and all data
 ```
 
 **Default Configuration:**
@@ -47,6 +53,55 @@ sudo ./deploy-timescaledb.sh uninstall # Remove service (preserves data)
 - Database: `res_index`
 - Username: `qsafe`
 - Password: `changeme` (set via `POSTGRES_PASSWORD` env var)
+
+### `deploy-hasura-podman.sh`
+
+Deploys Hasura GraphQL Engine to provide a GraphQL API over the Chronicle database.
+
+**Features:**
+- Auto-connects to TimescaleDB database
+- Provides GraphQL API for querying blockchain data
+- Includes web console for API exploration
+- Configures health checks and monitoring
+- Optional systemd service for automatic startup
+
+**Usage:**
+```bash
+# Deploy and start Hasura
+sudo ./deploy-hasura-podman.sh
+
+# Other commands
+sudo ./deploy-hasura-podman.sh status    # Check service status
+sudo ./deploy-hasura-podman.sh stop      # Stop the container
+sudo ./deploy-hasura-podman.sh start     # Start the container
+sudo ./deploy-hasura-podman.sh restart   # Restart the container
+sudo ./deploy-hasura-podman.sh logs      # Follow container logs
+sudo ./deploy-hasura-podman.sh shell     # Open shell in container
+sudo ./deploy-hasura-podman.sh console   # Open Hasura Console in browser
+sudo ./deploy-hasura-podman.sh graphql   # Execute GraphQL query interactively
+sudo ./deploy-hasura-podman.sh remove    # Remove container (preserves metadata)
+sudo ./deploy-hasura-podman.sh purge     # Remove container and all metadata
+```
+
+**Default Configuration:**
+- Port: `8080`
+- Console: `http://localhost:8080/console`
+- GraphQL Endpoint: `http://localhost:8080/v1/graphql`
+- Admin Secret: `changeme` (set via `HASURA_ADMIN_SECRET` env var)
+- Database: Connects to TimescaleDB at `localhost:5432`
+
+**GraphQL Query Example:**
+```bash
+# Query with curl
+curl -X POST http://localhost:8080/v1/graphql \
+  -H "X-Hasura-Admin-Secret: changeme" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "{ blocks(limit: 10) { number hash timestamp } }"}'
+
+# Interactive query
+./deploy-hasura-podman.sh graphql
+# Then type your query and press Ctrl+D
+```
 
 ### `test-local.sh`
 
@@ -114,10 +169,13 @@ EVENT_BATCH_SIZE=1000
 
 ```bash
 # Deploy TimescaleDB (one-time setup)
-sudo ./deploy-timescaledb.sh
+sudo ./deploy-timescaledb-podman.sh
 
 # Verify deployment
-sudo -u qsafe systemctl --user status qsafe-timescaledb
+sudo ./deploy-timescaledb-podman.sh status
+
+# (Optional) Deploy Hasura for GraphQL API
+sudo ./deploy-hasura-podman.sh
 ```
 
 ### 2. Configure Test Environment
@@ -128,9 +186,9 @@ Edit `test-local.env` to set your blockchain endpoint:
 # For local development node
 export WS_URL="ws://localhost:9944"
 
-# For public testnets
-export WS_URL="wss://westend-rpc.polkadot.io"  # Westend
-export WS_URL="wss://rococo-rpc.polkadot.io"   # Rococo
+# For quantum-safe testnets
+export WS_URL="wss://a.t.res.fm"  # Resonance (quantum-safe PoW)
+export WS_URL="wss://a.i.res.fm"  # Heisenberg (quantum-safe)
 ```
 
 ### 3. Run Tests
@@ -152,7 +210,10 @@ cargo run --release
 ./test-local.sh run
 
 # Watch TimescaleDB logs
-sudo -u qsafe journalctl --user -u qsafe-timescaledb -f
+sudo ./deploy-timescaledb-podman.sh logs
+
+# Watch Hasura logs (if deployed)
+sudo ./deploy-hasura-podman.sh logs
 
 # Check database content
 psql -h localhost -U qsafe -d res_index
@@ -183,7 +244,7 @@ psql -h localhost -U qsafe -d res_index
 
 ```bash
 # Execute SQL in container
-podman exec -it qsafe-timescaledb psql -U qsafe -d res_index
+sudo ./deploy-timescaledb-podman.sh psql
 
 # Backup database
 podman exec qsafe-timescaledb pg_dump -U qsafe res_index > backup.sql
@@ -196,28 +257,37 @@ cat backup.sql | podman exec -i qsafe-timescaledb psql -U qsafe -d res_index
 
 ### TimescaleDB Service
 
-The TimescaleDB runs as a user systemd service under the `qsafe` user:
-
 ```bash
-# Service control (as root or with sudo)
-sudo -u qsafe systemctl --user status qsafe-timescaledb
-sudo -u qsafe systemctl --user stop qsafe-timescaledb
-sudo -u qsafe systemctl --user start qsafe-timescaledb
-sudo -u qsafe systemctl --user restart qsafe-timescaledb
+# Service control
+sudo ./deploy-timescaledb-podman.sh status
+sudo ./deploy-timescaledb-podman.sh stop
+sudo ./deploy-timescaledb-podman.sh start
+sudo ./deploy-timescaledb-podman.sh restart
 
 # View logs
-sudo -u qsafe journalctl --user -u qsafe-timescaledb -f
+sudo ./deploy-timescaledb-podman.sh logs
 
 # Check container
-sudo -u qsafe podman ps
-sudo -u qsafe podman logs qsafe-timescaledb
+podman ps -a --filter name=qsafe-timescaledb
 ```
 
-### Quadlet File Location
+### Hasura Service
 
-The quadlet configuration is stored at:
-```
-/var/lib/qsafe/.config/containers/systemd/qsafe-timescaledb.container
+```bash
+# Service control
+sudo ./deploy-hasura-podman.sh status
+sudo ./deploy-hasura-podman.sh stop
+sudo ./deploy-hasura-podman.sh start
+sudo ./deploy-hasura-podman.sh restart
+
+# View logs
+sudo ./deploy-hasura-podman.sh logs
+
+# Open console
+sudo ./deploy-hasura-podman.sh console
+
+# Check container
+podman ps -a --filter name=qsafe-hasura
 ```
 
 ## Troubleshooting
@@ -226,16 +296,32 @@ The quadlet configuration is stored at:
 
 ```bash
 # Check service status
-sudo -u qsafe systemctl --user status qsafe-timescaledb
+sudo ./deploy-timescaledb-podman.sh status
 
 # Check logs
-sudo -u qsafe journalctl --user -u qsafe-timescaledb -xe
+sudo ./deploy-timescaledb-podman.sh logs
 
 # Check if port is in use
 ss -tlnp | grep 5432
 
 # Check container status
-sudo -u qsafe podman ps -a
+podman ps -a --filter name=qsafe-timescaledb
+```
+
+### Hasura Won't Start
+
+```bash
+# Check service status
+sudo ./deploy-hasura-podman.sh status
+
+# Check logs
+sudo ./deploy-hasura-podman.sh logs
+
+# Verify TimescaleDB is running
+sudo ./deploy-timescaledb-podman.sh status
+
+# Test database connectivity
+pg_isready -h localhost -p 5432
 ```
 
 ### Database Connection Failed
@@ -285,18 +371,30 @@ psql -h localhost -U qsafe -d res_index -c "\dn"
 # Stop Chronicle (Ctrl+C in terminal)
 
 # Stop TimescaleDB
-sudo ./deploy-timescaledb.sh stop
+sudo ./deploy-timescaledb-podman.sh stop
+
+# Stop Hasura (if deployed)
+sudo ./deploy-hasura-podman.sh stop
 ```
 
 ### Remove TimescaleDB
 
 ```bash
-# Remove service but keep data
-sudo ./deploy-timescaledb.sh uninstall
+# Remove container but keep data
+sudo ./deploy-timescaledb-podman.sh remove
 
 # Completely remove including data
-sudo ./deploy-timescaledb.sh uninstall
-sudo rm -rf /var/lib/qsafe/timescaledb-data
+sudo ./deploy-timescaledb-podman.sh purge
+```
+
+### Remove Hasura
+
+```bash
+# Remove container but keep metadata
+sudo ./deploy-hasura-podman.sh remove
+
+# Completely remove including metadata
+sudo ./deploy-hasura-podman.sh purge
 ```
 
 ### Remove Test Data
@@ -315,7 +413,9 @@ CREATE DATABASE res_index;
 
 ## Security Notes
 
-1. **Default Password**: Change `changeme` in production!
+1. **Default Passwords**: Change `changeme` passwords in production!
+   - TimescaleDB: Set via `POSTGRES_PASSWORD` environment variable
+   - Hasura: Set via `HASURA_ADMIN_SECRET` environment variable
 2. **Network**: By default, listens on all interfaces. Restrict in production.
 3. **User Isolation**: Runs as dedicated `qsafe` user for security.
 4. **Capabilities**: Drops unnecessary capabilities, only keeps required ones.
@@ -328,14 +428,12 @@ The deployment configures TimescaleDB with reasonable defaults:
 - Effective cache size: 1GB
 - Work memory: 4MB
 
-For production, adjust based on your hardware:
-- Edit the quadlet file at `/var/lib/qsafe/.config/containers/systemd/qsafe-timescaledb.container`
-- Restart the service: `sudo -u qsafe systemctl --user restart qsafe-timescaledb`
+For production, adjust based on your hardware by modifying environment variables in the deployment scripts.
 
 ## Support
 
 For issues:
 1. Check the troubleshooting section
-2. Review logs with `./deploy-timescaledb.sh logs`
+2. Review logs with `./deploy-timescaledb-podman.sh logs` or `./deploy-hasura-podman.sh logs`
 3. Ensure all dependencies are installed
-4. Verify network connectivity to blockchain node
+4. Verify network connectivity to quantum-safe blockchain node

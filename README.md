@@ -1,6 +1,6 @@
-# Chronicle - Substrate Blockchain Indexer
+# Chronicle - Quantum-Safe Blockchain Indexer
 
-Chronicle is a high-performance blockchain indexer for Substrate-based chains that tracks account balances by walking the chain from genesis to head, recording all balance-affecting events. It's designed specifically for mined PoW, post-quantum blockchains with WebSocket endpoints.
+Chronicle is a high-performance blockchain indexer exclusively for quantum-safe Substrate-based chains using NIST-approved signature schemes like Dilithium. It tracks account balances by walking the chain from genesis to head, recording all balance-affecting events. Chronicle is designed specifically for post-quantum blockchains, as traditional chains using ECDSA or *25519 signatures will be obsolete in the quantum era.
 
 ## Features
 
@@ -62,7 +62,7 @@ The indexer is configured via environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `WS_URL` | WebSocket endpoint of the blockchain node | `wss://a.t.res.fm` |
+| `WS_URL` | WebSocket endpoint of the quantum-safe blockchain node | `wss://a.t.res.fm` (Resonance) |
 | `PG_DSN` | PostgreSQL connection string | `postgres://res:change-me@127.0.0.1:5432/res_index` |
 | `ENABLE_TIMESCALE` | Enable TimescaleDB hypertables | `false` |
 | `DB_MAX_CONNECTIONS` | Maximum database connections | `10` |
@@ -135,7 +135,7 @@ After=network-online.target postgresql.service
 
 [Container]
 Image=localhost/chronicled:latest
-Environment=WS_URL=wss://your-node.example.com
+Environment=WS_URL=wss://a.t.res.fm
 Environment=PG_DSN=postgres://user:pass@localhost/indexdb
 Environment=RUST_LOG=info
 Restart=always
@@ -170,7 +170,7 @@ CMD ["chronicled"]
 Build and run:
 ```bash
 docker build -t chronicled .
-docker run -e WS_URL=wss://your-node.example.com \
+docker run -e WS_URL=wss://a.t.res.fm \
            -e PG_DSN=postgres://user:pass@db/indexdb \
            chronicled
 ```
@@ -178,7 +178,10 @@ docker run -e WS_URL=wss://your-node.example.com \
 ### Direct Execution
 
 ```bash
-export WS_URL=wss://your-node.example.com
+# For Resonance testnet (quantum-safe PoW)
+export WS_URL=wss://a.t.res.fm
+# Or Heisenberg testnet (quantum-safe)
+# export WS_URL=wss://a.i.res.fm
 export PG_DSN=postgres://user:pass@localhost/indexdb
 export RUST_LOG=info
 ./target/release/chronicled
@@ -255,8 +258,8 @@ For better type safety, generate static types from your chain's metadata:
 # Install subxt-cli
 cargo install subxt-cli
 
-# Download metadata from your node
-subxt metadata -f bytes --url wss://your-node.example.com > metadata.scale
+# Download metadata from your quantum-safe node
+subxt metadata -f bytes --url wss://a.t.res.fm > metadata.scale
 
 # Add to your balance_decoder.rs:
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
