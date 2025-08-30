@@ -576,7 +576,7 @@ impl BalanceDecoder {
     /// Query miner rewards for PoW chains
     pub async fn decode_miner_rewards(
         &self,
-        _block_hash: [u8; 32],
+        _block_hash: subxt::ext::sp_core::H256,
         _block_number: i64,
         _block_timestamp: DateTime<Utc>,
     ) -> Result<Vec<BalanceChange>> {

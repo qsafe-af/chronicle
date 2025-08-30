@@ -7,8 +7,130 @@ use chron_db::{
     SchemaManager,
 };
 use chrono::Utc;
+use serde::Deserialize;
+use subxt::ext::sp_core::H256;
 use subxt::{backend::rpc::RpcClient, OnlineClient, PolkadotConfig};
 use tracing::{debug, info, warn};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RpcHeader {
+    parent_hash: H256,
+    number: String,
+    state_root: H256,
+    extrinsics_root: H256,
+    #[serde(default)]
+    digest: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcBlockData {
+    header: RpcHeader,
+    extrinsics: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcBlock {
+    block: RpcBlockData,
+    justifications: Option<serde_json::Value>,
+}
+
+struct RpcHelper {
+    client: RpcClient,
+}
+
+impl RpcHelper {
+    fn new(client: RpcClient) -> Self {
+        Self { client }
+    }
+
+    async fn get_block_hash_by_number(&self, number: u64) -> anyhow::Result<H256> {
+        use subxt::backend::legacy::rpc_methods::NumberOrHex;
+        use subxt::backend::legacy::LegacyRpcMethods;
+
+        let legacy_rpc = LegacyRpcMethods::<PolkadotConfig>::new(self.client.clone());
+        let block_number = NumberOrHex::Number(number);
+        let hash = legacy_rpc
+            .chain_get_block_hash(Some(block_number))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No block hash found for block #{}", number))?;
+        Ok(hash)
+    }
+
+    async fn get_latest_block_hash(&self) -> anyhow::Result<H256> {
+        use subxt::backend::legacy::LegacyRpcMethods;
+
+        let legacy_rpc = LegacyRpcMethods::<PolkadotConfig>::new(self.client.clone());
+        let hash = legacy_rpc
+            .chain_get_block_hash(None)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No latest block hash found"))?;
+        Ok(hash)
+    }
+
+    async fn get_block_by_hash(&self, hash: &H256) -> anyhow::Result<RpcBlock> {
+        use subxt::backend::legacy::LegacyRpcMethods;
+
+        let legacy_rpc = LegacyRpcMethods::<PolkadotConfig>::new(self.client.clone());
+        let signed_block = legacy_rpc
+            .chain_get_block(Some(*hash))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No block found for hash"))?;
+
+        // Convert from legacy SignedBlock to our RpcBlock structure
+        let block = RpcBlock {
+            block: RpcBlockData {
+                header: RpcHeader {
+                    parent_hash: signed_block.block.header.parent_hash,
+                    number: format!("{:#x}", signed_block.block.header.number),
+                    state_root: signed_block.block.header.state_root,
+                    extrinsics_root: signed_block.block.header.extrinsics_root,
+                    digest: serde_json::Value::Null,
+                },
+                extrinsics: signed_block
+                    .block
+                    .extrinsics
+                    .into_iter()
+                    .map(|ext| format!("0x{}", hex::encode(ext.0)))
+                    .collect(),
+            },
+            justifications: None,
+        };
+        Ok(block)
+    }
+
+    async fn get_header_by_hash(&self, hash: &H256) -> anyhow::Result<RpcHeader> {
+        use subxt::backend::legacy::LegacyRpcMethods;
+
+        let legacy_rpc = LegacyRpcMethods::<PolkadotConfig>::new(self.client.clone());
+        let header = legacy_rpc
+            .chain_get_header(Some(*hash))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No header found for hash"))?;
+
+        Ok(RpcHeader {
+            parent_hash: header.parent_hash,
+            number: format!("{:#x}", header.number),
+            state_root: header.state_root,
+            extrinsics_root: header.extrinsics_root,
+            digest: serde_json::Value::Null,
+        })
+    }
+}
+
+fn hex_to_h256(s: &str) -> anyhow::Result<H256> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    let bytes = hex::decode(s)?;
+    if bytes.len() != 32 {
+        return Err(anyhow::anyhow!(
+            "expected 32 bytes for H256, got {}",
+            bytes.len()
+        ));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(H256::from(arr))
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -141,7 +263,7 @@ async fn main() -> Result<()> {
         finality_confirmations
     );
 
-    let mut last_runtime_version: Option<u32> = None;
+    let _last_runtime_version: Option<u32> = None;
 
     // Catch up on historical blocks before starting subscription
     let current_best = client.blocks().at_latest().await?;
@@ -157,54 +279,135 @@ async fn main() -> Result<()> {
     // Process any blocks we're behind on
     if progress.latest_block < safe_block_number {
         info!(
-            "Catching up from block {} to block {}",
+            "Catching up from block {} to block {} (using JSON-RPC chain_getBlock)",
             progress.latest_block + 1,
             safe_block_number
         );
 
-        // Process historical blocks using subxt's legacy RPC methods
-        use subxt::backend::legacy::rpc_methods::NumberOrHex;
-        use subxt::backend::legacy::LegacyRpcMethods;
-        let legacy_rpc = LegacyRpcMethods::<PolkadotConfig>::new(rpc_client.clone());
+        // Process historical blocks using JSON-RPC (chain_getBlock/chain_getHeader) only; no subxt block fetching
+        let rpc = RpcHelper::new(rpc_client.clone());
 
         // Process historical blocks using subxt's legacy RPC methods
         for block_num in (progress.latest_block + 1)..=safe_block_number {
-            // Step 1: Get block hash using legacy RPC method
-            // Use NumberOrHex type as expected by the RPC method
-            let block_number = NumberOrHex::Number(block_num as u64);
-            let block_hash = match legacy_rpc.chain_get_block_hash(Some(block_number)).await? {
-                Some(hash) => hash,
-                None => {
-                    warn!("No block hash found for block #{}", block_num);
+            // Step 1: Get block hash using direct RPC
+            let block_hash = match rpc.get_block_hash_by_number(block_num as u64).await {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!("No block hash found for block #{}: {}", block_num, e);
                     continue;
                 }
             };
 
-            // Step 3: Fetch the block using the hash
-            match client.blocks().at(block_hash).await {
-                Ok(block) => {
+            // Step 2: Fetch the block using chain_getBlock
+            debug!(
+                "Requesting historical block #{} via chain_getBlock by hash {}",
+                block_num,
+                hex::encode(block_hash.as_bytes())
+            );
+            match rpc.get_block_by_hash(&block_hash).await {
+                Ok(rpc_block) => {
+                    let header = rpc_block.block.header;
+
+                    // We asked for a specific number; keep it authoritative
+                    let block_number = block_num as i64;
+                    let parent_hash = header.parent_hash;
+
                     info!(
                         "Processing historical block #{} ({})",
-                        block_num,
-                        hex::encode(&block_hash)
+                        block_number,
+                        hex::encode(block_hash.as_bytes())
                     );
 
-                    process_block(
-                        &client,
-                        &pool,
-                        &chain_id,
-                        &decoder,
-                        block,
-                        &mut progress,
-                        &mut last_runtime_version,
-                    )
-                    .await?;
+                    // Build block record from header
+                    let timestamp = Utc::now(); // TODO: use timestamp from extrinsics if needed
+                    let runtime_version = client.runtime_version();
+                    let runtime_spec = runtime_version.spec_version as i64;
+
+                    let block_record = Block::new(
+                        block_number,
+                        block_hash.as_bytes().to_vec(),
+                        parent_hash.as_bytes().to_vec(),
+                        timestamp,
+                        runtime_spec,
+                    );
+
+                    // Store block in database (no events in this path)
+                    let mut conn = pool.get().await?;
+                    let tx = conn.transaction().await?;
+                    let tx_wrapper = chron_db::TransactionWrapper::new(tx, Some(chain_id.clone()));
+
+                    {
+                        let schema = tx_wrapper.schema_name()?;
+                        let block_sql = format!(
+                            r#"
+                        INSERT INTO {schema}.blocks (number, hash, parent_hash, timestamp, is_canonical, runtime_spec)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (number) DO UPDATE SET
+                            hash = EXCLUDED.hash,
+                            parent_hash = EXCLUDED.parent_hash,
+                            timestamp = EXCLUDED.timestamp,
+                            is_canonical = EXCLUDED.is_canonical,
+                            runtime_spec = EXCLUDED.runtime_spec
+                        "#,
+                            schema = schema
+                        );
+                        tx_wrapper
+                            .execute(
+                                &block_sql,
+                                &[
+                                    &block_record.number,
+                                    &block_record.hash,
+                                    &block_record.parent_hash,
+                                    &block_record.timestamp,
+                                    &block_record.is_canonical,
+                                    &block_record.runtime_spec,
+                                ],
+                            )
+                            .await?;
+
+                        // Update progress
+                        progress.latest_block = block_number;
+                        progress.latest_block_hash = block_hash.as_bytes().to_vec();
+                        progress.latest_block_ts = timestamp;
+                        progress.blocks_indexed += 1;
+
+                        let progress_sql = format!(
+                            r#"
+                        UPDATE {schema}.index_progress
+                        SET latest_block = $2,
+                            latest_block_hash = $3,
+                            latest_block_ts = $4,
+                            blocks_indexed = $5,
+                            balance_changes_recorded = $6,
+                            updated_at = $7
+                        WHERE chain_id = $1
+                        "#,
+                            schema = schema
+                        );
+                        tx_wrapper
+                            .execute(
+                                &progress_sql,
+                                &[
+                                    &progress.chain_id,
+                                    &progress.latest_block,
+                                    &progress.latest_block_hash,
+                                    &progress.latest_block_ts,
+                                    &progress.blocks_indexed,
+                                    &progress.balance_changes_recorded,
+                                    &chrono::Utc::now(),
+                                ],
+                            )
+                            .await?;
+                    }
+
+                    tx_wrapper.commit().await?;
+                    info!("Indexed block #{} with {} balance changes", block_number, 0);
                 }
                 Err(e) => {
                     warn!(
                         "Failed to fetch block #{} at hash {}: {}",
                         block_num,
-                        hex::encode(&block_hash),
+                        hex::encode(block_hash.as_bytes()),
                         e
                     );
                     // Continue with next block instead of failing completely
@@ -217,6 +420,7 @@ async fn main() -> Result<()> {
     }
 
     // Main indexing loop - use best blocks for PoW chains
+    let rpc_live = RpcHelper::new(rpc_client.clone());
     let mut block_sub = if follow_best {
         info!("Following best blocks (PoW mode)");
         client.blocks().subscribe_best().await?
@@ -224,7 +428,7 @@ async fn main() -> Result<()> {
         info!("Following finalized blocks (instant finality mode)");
         client.blocks().subscribe_finalized().await?
     };
-    let mut pending_blocks: std::collections::BTreeMap<i64, [u8; 32]> =
+    let mut pending_blocks: std::collections::BTreeMap<i64, subxt::ext::sp_core::H256> =
         std::collections::BTreeMap::new();
 
     while let Some(block_result) = block_sub.next().await {
@@ -264,16 +468,89 @@ async fn main() -> Result<()> {
                         );
 
                         // Process this confirmed block
-                        process_block(
-                            &client,
-                            &pool,
-                            &chain_id,
-                            &decoder,
-                            block,
-                            &mut progress,
-                            &mut last_runtime_version,
-                        )
-                        .await?;
+                        // Commit this confirmed block based on header only (no subxt block/event usage)
+                        let header = match rpc_live.get_header_by_hash(&block_hash).await {
+                            Ok(h) => h,
+                            Err(e) => {
+                                warn!(
+                                    "Failed to fetch header for confirmed block #{}: {}",
+                                    block_number, e
+                                );
+                                continue;
+                            }
+                        };
+                        let timestamp = Utc::now();
+                        let runtime_version = client.runtime_version();
+                        let runtime_spec = runtime_version.spec_version as i64;
+
+                        // Store block and update progress
+                        let mut conn = pool.get().await?;
+                        let tx = conn.transaction().await?;
+                        let tx_wrapper =
+                            chron_db::TransactionWrapper::new(tx, Some(chain_id.clone()));
+                        let schema = tx_wrapper.schema_name()?;
+
+                        let block_sql = format!(
+                            r#"
+                        INSERT INTO {schema}.blocks (number, hash, parent_hash, timestamp, is_canonical, runtime_spec)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (number) DO UPDATE SET
+                            hash = EXCLUDED.hash,
+                            parent_hash = EXCLUDED.parent_hash,
+                            timestamp = EXCLUDED.timestamp,
+                            is_canonical = EXCLUDED.is_canonical,
+                            runtime_spec = EXCLUDED.runtime_spec
+                        "#,
+                            schema = schema
+                        );
+                        tx_wrapper
+                            .execute(
+                                &block_sql,
+                                &[
+                                    &block_number,
+                                    &block_hash.as_bytes().to_vec(),
+                                    &header.parent_hash.as_bytes().to_vec(),
+                                    &timestamp,
+                                    &true,
+                                    &runtime_spec,
+                                ],
+                            )
+                            .await?;
+
+                        progress.latest_block = block_number;
+                        progress.latest_block_hash = block_hash.as_bytes().to_vec();
+                        progress.latest_block_ts = timestamp;
+                        progress.blocks_indexed += 1;
+
+                        let progress_sql = format!(
+                            r#"
+                        UPDATE {schema}.index_progress
+                        SET latest_block = $2,
+                            latest_block_hash = $3,
+                            latest_block_ts = $4,
+                            blocks_indexed = $5,
+                            balance_changes_recorded = $6,
+                            updated_at = $7
+                        WHERE chain_id = $1
+                        "#,
+                            schema = schema
+                        );
+                        tx_wrapper
+                            .execute(
+                                &progress_sql,
+                                &[
+                                    &progress.chain_id,
+                                    &progress.latest_block,
+                                    &progress.latest_block_hash,
+                                    &progress.latest_block_ts,
+                                    &progress.blocks_indexed,
+                                    &progress.balance_changes_recorded,
+                                    &chrono::Utc::now(),
+                                ],
+                            )
+                            .await?;
+
+                        tx_wrapper.commit().await?;
                     } else {
                         debug!(
                             "Block #{} waiting for confirmations ({}/{})",
@@ -281,7 +558,7 @@ async fn main() -> Result<()> {
                         );
 
                         // Store block info for potential reorg detection
-                        pending_blocks.insert(block_number, block_hash.into());
+                        pending_blocks.insert(block_number, block_hash);
 
                         // Process any old blocks that now have enough confirmations
                         let confirmed_height =
@@ -292,35 +569,93 @@ async fn main() -> Result<()> {
                             if pending_number <= confirmed_height
                                 && pending_number > progress.latest_block
                             {
-                                // Fetch the block again to process it
-                                match client
-                                    .blocks()
-                                    .at(subxt::ext::sp_core::H256::from(pending_hash))
-                                    .await
-                                {
-                                    Ok(old_block) => {
+                                match rpc_live.get_header_by_hash(&pending_hash).await {
+                                    Ok(pending_header) => {
                                         info!(
                                             "Processing previously pending block #{} ({})",
                                             pending_number,
-                                            hex::encode(&pending_hash)
+                                            hex::encode(pending_hash.as_ref())
                                         );
 
-                                        process_block(
-                                            &client,
-                                            &pool,
-                                            &chain_id,
-                                            &decoder,
-                                            old_block,
-                                            &mut progress,
-                                            &mut last_runtime_version,
-                                        )
-                                        .await?;
+                                        let timestamp = Utc::now();
+                                        let runtime_version = client.runtime_version();
+                                        let runtime_spec = runtime_version.spec_version as i64;
 
+                                        let mut conn = pool.get().await?;
+                                        let tx = conn.transaction().await?;
+                                        let tx_wrapper = chron_db::TransactionWrapper::new(
+                                            tx,
+                                            Some(chain_id.clone()),
+                                        );
+                                        let schema = tx_wrapper.schema_name()?;
+
+                                        let block_sql = format!(
+                                            r#"
+                                    INSERT INTO {schema}.blocks (number, hash, parent_hash, timestamp, is_canonical, runtime_spec)
+                                    VALUES ($1, $2, $3, $4, $5, $6)
+                                    ON CONFLICT (number) DO UPDATE SET
+                                        hash = EXCLUDED.hash,
+                                        parent_hash = EXCLUDED.parent_hash,
+                                        timestamp = EXCLUDED.timestamp,
+                                        is_canonical = EXCLUDED.is_canonical,
+                                        runtime_spec = EXCLUDED.runtime_spec
+                                    "#,
+                                            schema = schema
+                                        );
+                                        tx_wrapper
+                                            .execute(
+                                                &block_sql,
+                                                &[
+                                                    &pending_number,
+                                                    &pending_hash.as_bytes().to_vec(),
+                                                    &pending_header.parent_hash.as_bytes().to_vec(),
+                                                    &timestamp,
+                                                    &true,
+                                                    &runtime_spec,
+                                                ],
+                                            )
+                                            .await?;
+
+                                        progress.latest_block = pending_number;
+                                        progress.latest_block_hash =
+                                            pending_hash.as_bytes().to_vec();
+                                        progress.latest_block_ts = timestamp;
+                                        progress.blocks_indexed += 1;
+
+                                        let progress_sql = format!(
+                                            r#"
+                                    UPDATE {schema}.index_progress
+                                    SET latest_block = $2,
+                                        latest_block_hash = $3,
+                                        latest_block_ts = $4,
+                                        blocks_indexed = $5,
+                                        balance_changes_recorded = $6,
+                                        updated_at = $7
+                                    WHERE chain_id = $1
+                                    "#,
+                                            schema = schema
+                                        );
+                                        tx_wrapper
+                                            .execute(
+                                                &progress_sql,
+                                                &[
+                                                    &progress.chain_id,
+                                                    &progress.latest_block,
+                                                    &progress.latest_block_hash,
+                                                    &progress.latest_block_ts,
+                                                    &progress.blocks_indexed,
+                                                    &progress.balance_changes_recorded,
+                                                    &chrono::Utc::now(),
+                                                ],
+                                            )
+                                            .await?;
+
+                                        tx_wrapper.commit().await?;
                                         to_remove.push(pending_number);
                                     }
                                     Err(e) => {
                                         warn!(
-                                            "Failed to fetch pending block #{}: {}",
+                                            "Failed to fetch pending block header #{}: {}",
                                             pending_number, e
                                         );
                                         to_remove.push(pending_number);
@@ -345,16 +680,88 @@ async fn main() -> Result<()> {
                         hex::encode(&block_hash)
                     );
 
-                    process_block(
-                        &client,
-                        &pool,
-                        &chain_id,
-                        &decoder,
-                        block,
-                        &mut progress,
-                        &mut last_runtime_version,
-                    )
-                    .await?;
+                    // Commit finalized block based on header only (no subxt block/event usage)
+                    let header = match rpc_live.get_header_by_hash(&block_hash).await {
+                        Ok(h) => h,
+                        Err(e) => {
+                            warn!(
+                                "Failed to fetch header for finalized block #{}: {}",
+                                block_number, e
+                            );
+                            continue;
+                        }
+                    };
+                    let timestamp = Utc::now();
+                    let runtime_version = client.runtime_version();
+                    let runtime_spec = runtime_version.spec_version as i64;
+
+                    let mut conn = pool.get().await?;
+                    let tx = conn.transaction().await?;
+                    let tx_wrapper =
+                        chron_db::TransactionWrapper::new(tx, Some(chain_id.to_string()));
+                    let schema = tx_wrapper.schema_name()?;
+
+                    let block_sql = format!(
+                        r#"
+                        INSERT INTO {schema}.blocks (number, hash, parent_hash, timestamp, is_canonical, runtime_spec)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (number) DO UPDATE SET
+                            hash = EXCLUDED.hash,
+                            parent_hash = EXCLUDED.parent_hash,
+                            timestamp = EXCLUDED.timestamp,
+                            is_canonical = EXCLUDED.is_canonical,
+                            runtime_spec = EXCLUDED.runtime_spec
+                        "#,
+                        schema = schema
+                    );
+                    tx_wrapper
+                        .execute(
+                            &block_sql,
+                            &[
+                                &block_number,
+                                &block_hash.as_bytes().to_vec(),
+                                &header.parent_hash.as_bytes().to_vec(),
+                                &timestamp,
+                                &true,
+                                &runtime_spec,
+                            ],
+                        )
+                        .await?;
+
+                    progress.latest_block = block_number;
+                    progress.latest_block_hash = block_hash.as_bytes().to_vec();
+                    progress.latest_block_ts = timestamp;
+                    progress.blocks_indexed += 1;
+
+                    let progress_sql = format!(
+                        r#"
+                        UPDATE {schema}.index_progress
+                        SET latest_block = $2,
+                            latest_block_hash = $3,
+                            latest_block_ts = $4,
+                            blocks_indexed = $5,
+                            balance_changes_recorded = $6,
+                            updated_at = $7
+                        WHERE chain_id = $1
+                        "#,
+                        schema = schema
+                    );
+                    tx_wrapper
+                        .execute(
+                            &progress_sql,
+                            &[
+                                &progress.chain_id,
+                                &progress.latest_block,
+                                &progress.latest_block_hash,
+                                &progress.latest_block_ts,
+                                &progress.blocks_indexed,
+                                &progress.balance_changes_recorded,
+                                &chrono::Utc::now(),
+                            ],
+                        )
+                        .await?;
+
+                    tx_wrapper.commit().await?;
                 }
             }
             Err(e) => {
@@ -370,6 +777,8 @@ async fn main() -> Result<()> {
 }
 
 /// Process a single confirmed block
+#[allow(dead_code)]
+/// Removed from active use; blocks are committed via chain_getBlock JSON-RPC now.
 async fn process_block(
     client: &OnlineClient<PolkadotConfig>,
     pool: &ConnectionPool,
@@ -383,6 +792,16 @@ async fn process_block(
     let block_hash = block.hash();
     let block_header = block.header();
     let parent_hash = block_header.parent_hash;
+
+    // Debug header fields to validate hashes used
+    debug!(
+        "Header fields for block #{}: hash={}, parent={}, state_root={}, extrinsics_root={}",
+        block_number,
+        hex::encode(block_hash.as_bytes()),
+        hex::encode(parent_hash.as_bytes()),
+        hex::encode(block_header.state_root.as_bytes()),
+        hex::encode(block_header.extrinsics_root.as_bytes())
+    );
 
     // Extract timestamp from block (this is a simplified version)
     let timestamp = Utc::now(); // TODO: Extract actual block timestamp from extrinsics
@@ -416,7 +835,7 @@ async fn process_block(
             info!("Storing new runtime metadata for v{}", current_spec_version);
 
             // Get the metadata bytes
-            let metadata_bytes = get_metadata_at_block(client, block_hash.into()).await?;
+            let metadata_bytes = get_metadata_at_block(client, block_hash).await?;
 
             let runtime_metadata = RuntimeMetadata::new(
                 current_spec_version as i32,
@@ -442,18 +861,35 @@ async fn process_block(
         runtime_spec,
     );
 
-    // Process events to extract balance changes
-    let events = block.events().await?;
-    let balance_changes = decoder
-        .decode_balance_changes(events, block_number, timestamp)
-        .await?;
+    // Process events to extract balance changes (skip genesis block to avoid querying events at #0)
+    let mut all_balance_changes = Vec::new();
+    if block_number > 0 {
+        match block.events().await {
+            Ok(events) => {
+                match decoder
+                    .decode_balance_changes(events, block_number, timestamp)
+                    .await
+                {
+                    Ok(balance_changes) => {
+                        all_balance_changes.extend(balance_changes);
+                    }
+                    Err(e) => {
+                        warn!("Failed to decode events for block #{}: {}", block_number, e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to fetch events for block #{}: {}", block_number, e);
+            }
+        }
+    } else {
+        debug!("Skipping events decoding for genesis block");
+    }
 
     // Check for miner rewards (for PoW chains)
     let miner_rewards = decoder
-        .decode_miner_rewards(block_hash.into(), block_number, timestamp)
+        .decode_miner_rewards(block_hash, block_number, timestamp)
         .await?;
-
-    let mut all_balance_changes = balance_changes;
     all_balance_changes.extend(miner_rewards);
 
     // Store block and balance changes in database within a transaction
@@ -603,7 +1039,7 @@ async fn scan_and_store_runtime_versions(
 
     // Get genesis runtime
     let genesis_hash = client.genesis_hash();
-    let genesis_metadata = get_metadata_at_block(client, genesis_hash.into()).await?;
+    let genesis_metadata = get_metadata_at_block(client, genesis_hash).await?;
     let genesis_version = client.runtime_version(); // This gets current, we'll use it as approximation
 
     let genesis_runtime = RuntimeMetadata::new(
@@ -644,14 +1080,17 @@ async fn scan_and_store_runtime_versions(
 /// Get metadata at a specific block
 async fn get_metadata_at_block(
     client: &OnlineClient<PolkadotConfig>,
-    block_hash: [u8; 32],
+    block_hash: subxt::ext::sp_core::H256,
 ) -> Result<Vec<u8>> {
     // Get metadata at this block
     use parity_scale_codec::Encode;
-    use subxt::ext::sp_core::H256;
 
-    let hash = H256::from(block_hash);
-    let _block = client.blocks().at(hash).await?;
+    let hash = block_hash;
+
+    // Log exact hash used for fetching metadata
+    info!("Fetching metadata at block {}", hex::encode(hash.as_ref()));
+
+    // NOTE: No RPC here; we don't need to refetch the block to get metadata
 
     // Get metadata from the block's runtime
     // For now we use the client's current metadata as subxt doesn't expose historical metadata easily
