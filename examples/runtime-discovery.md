@@ -15,7 +15,7 @@ When you start `chronicled`, it automatically:
 ```bash
 # Just run the indexer - runtime discovery happens automatically!
 export WS_URL=wss://your-node.example.com
-export PG_DSN=postgres://user:pass@localhost/indexdb
+export PG_DSN=postgresql:///chronicle
 ./chronicled
 ```
 

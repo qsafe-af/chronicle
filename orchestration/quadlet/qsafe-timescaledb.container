@@ -1,13 +1,13 @@
 [Unit]
-Description=qsafe timescaledb
+Description=chronicle timescaledb
 
 [Container]
 Image=timescale/timescaledb:latest-pg16
 PublishPort=5432:5432
-Volume=qsafe-timescaledb-data:/var/lib/qsafe/data
-Environment=POSTGRES_DB=qsafe_chain_index
-Environment=POSTGRES_USER=qsafe
-Environment=POSTGRES_PASSWORD=password
+Volume=chronicle-timescaledb-data:/var/lib/chronicle/data
+Environment=POSTGRES_DB=chronicle
+Environment=POSTGRES_USER=chronicle
+Environment=POSTGRES_PASSWORD=${PG_PASSWORD}
 Restart=always
 
 [Install]

@@ -10,13 +10,13 @@ Rust daemon that indexes PQ Substrate chains and writes balance-change facts.
 
 ## Config (env)
 - `WS_URL` — WebSocket endpoint (e.g., `wss://a.t.res.fm`)
-- `PG_DSN` — Postgres connection string (e.g., `postgres://user:pass@127.0.0.1:5432/chronicle`)
+- `PG_DSN` — Postgres connection string (e.g., `postgresql:///chronicle`)
 - `FINALITY_CONFIRMATIONS` — (optional) reorg buffer (e.g., `200`)
 - `RUST_LOG` — e.g., `info` / `debug`
 
 ## Run locally
 ```bash
-PG_DSN=postgres://... WS_URL=wss://... cargo run -p chronicled
+PG_DSN=postgresql:///chronicle WS_URL=wss://... cargo run -p chronicled
 ```
 
 ## Notes

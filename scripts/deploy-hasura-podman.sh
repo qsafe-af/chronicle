@@ -16,12 +16,13 @@ QSAFE_GID=9001
 CONTAINER_NAME="qsafe-hasura"
 CONTAINER_IMAGE="docker.io/hasura/graphql-engine:v2.36.0"
 HASURA_PORT="${HASURA_PORT:-8080}"
-HASURA_ADMIN_SECRET="${HASURA_ADMIN_SECRET:-changeme}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-changeme}"
+HASURA_ADMIN_SECRET="${HASURA_ADMIN_SECRET:?HASURA_ADMIN_SECRET must be set}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"
-DB_NAME="${DB_NAME:-res_index}"
-DB_USER="${DB_USER:-qsafe}"
+DB_NAME="${DB_NAME:-chronicle}"
+DB_USER="${DB_USER:-chronicle}"
+PG_PASSWORD="${PG_PASSWORD:-}"
 HASURA_DATA_DIR="${QSAFE_HOME}/hasura-data"
 SERVICE_NAME="qsafe-hasura"
 
@@ -161,16 +162,18 @@ start_container() {
 
     # Construct database URL - use host.containers.internal for localhost access
     if [ "${DB_HOST}" = "localhost" ] || [ "${DB_HOST}" = "127.0.0.1" ]; then
-        DATABASE_URL="postgres://${DB_USER}:${POSTGRES_PASSWORD}@host.containers.internal:${DB_PORT}/${DB_NAME}"
+        HOST_FOR_CONTAINER="host.containers.internal"
     else
-        DATABASE_URL="postgres://${DB_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+        HOST_FOR_CONTAINER="${DB_HOST}"
     fi
+    DATABASE_URL="postgres://${DB_USER}:${PG_PASSWORD}@${HOST_FOR_CONTAINER}:${DB_PORT}/${DB_NAME}"
 
     # Run the container
     podman run -d \
         --name ${CONTAINER_NAME} \
         --restart always \
         -e HASURA_GRAPHQL_DATABASE_URL="${DATABASE_URL}" \
+        -e PG_PASSWORD="${PG_PASSWORD}" \
         -e HASURA_GRAPHQL_ADMIN_SECRET="${HASURA_ADMIN_SECRET}" \
         -e HASURA_GRAPHQL_ENABLE_CONSOLE=true \
         -e HASURA_GRAPHQL_DEV_MODE=false \

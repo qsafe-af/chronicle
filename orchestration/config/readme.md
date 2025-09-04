@@ -12,7 +12,7 @@ Per-chain and per-service environment files used by Quadlet units.
 WS_URL=wss://a.t.res.fm
 
 # Postgres DSN (same DB for all chains; per-chain schemas are created automatically)
-PG_DSN=postgres://res:change-me@127.0.0.1:5432/chronicle
+PG_DSN=postgresql:///chronicle
 
 # Optional tuning
 FINALITY_CONFIRMATIONS=200

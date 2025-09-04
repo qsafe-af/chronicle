@@ -119,7 +119,7 @@ run_chronicle() {
         source "${SCRIPT_DIR}/test-local.env"
     else
         log_warn "test-local.env not found, using defaults"
-        export PG_DSN="postgres://qsafe:changeme@localhost:5432/res_index"
+        export PG_DSN="postgresql:///chronicle"
         export WS_URL="ws://localhost:9944"
         export RUST_LOG="info"
         export ENABLE_TIMESCALE="true"
@@ -170,6 +170,20 @@ test_database() {
         fi
 
         unset PGPASSWORD
+    elif [[ "${PG_DSN:-}" =~ postgresql:///([^?]+) ]]; then
+        DB_NAME="${BASH_REMATCH[1]}"
+        if psql -d "${DB_NAME}" -c "SELECT version();" &> /dev/null; then
+            log_info "Database connection successful (socket)"
+            # Check for TimescaleDB
+            if psql -d "${DB_NAME}" -c "SELECT extversion FROM pg_extension WHERE extname = 'timescaledb';" 2>/dev/null | grep -q "[0-9]"; then
+                log_info "TimescaleDB extension is installed"
+            else
+                log_warn "TimescaleDB extension not found"
+            fi
+        else
+            log_error "Failed to connect to database via Unix socket"
+            log_info "Ensure local Postgres is running and your user has access"
+        fi
     else
         log_warn "Could not parse PG_DSN for testing"
     fi

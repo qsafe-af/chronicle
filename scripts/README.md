@@ -22,7 +22,7 @@ sudo ./deploy-hasura-podman.sh
 Deploys TimescaleDB as a Podman container with a dedicated system user.
 
 **Features:**
-- Creates `qsafe` system user with home directory `/var/lib/qsafe`
+- Creates `chronicle` system user with home directory `/var/lib/chronicle`
 - Deploys TimescaleDB as a Podman container with optional systemd service
 - Configures TimescaleDB for optimal performance
 - Sets up persistent storage
@@ -46,13 +46,13 @@ sudo ./deploy-timescaledb-podman.sh purge     # Remove container and all data
 ```
 
 **Default Configuration:**
-- User: `qsafe` (UID: 9001)
-- Home: `/var/lib/qsafe`
-- Data: `/var/lib/qsafe/timescaledb-data`
+- User: `chronicle` (UID: 9001)
+- Home: `/var/lib/chronicle`
+- Data: `/var/lib/chronicle/timescaledb-data`
 - Port: `5432`
-- Database: `res_index`
-- Username: `qsafe`
-- Password: `changeme` (set via `POSTGRES_PASSWORD` env var)
+- Database: `chronicle`
+- Username: `chronicle`
+- Password: set via `PG_PASSWORD` environment variable
 
 ### `deploy-hasura-podman.sh`
 
@@ -87,14 +87,14 @@ sudo ./deploy-hasura-podman.sh purge     # Remove container and all metadata
 - Port: `8080`
 - Console: `http://localhost:8080/console`
 - GraphQL Endpoint: `http://localhost:8080/v1/graphql`
-- Admin Secret: `changeme` (set via `HASURA_ADMIN_SECRET` env var)
+- Admin Secret: set via `HASURA_ADMIN_SECRET` environment variable
 - Database: Connects to TimescaleDB at `localhost:5432`
 
 **GraphQL Query Example:**
 ```bash
 # Query with curl
 curl -X POST http://localhost:8080/v1/graphql \
-  -H "X-Hasura-Admin-Secret: changeme" \
+  -H "X-Hasura-Admin-Secret: ${HASURA_ADMIN_SECRET}" \
   -H "Content-Type: application/json" \
   -d '{"query": "{ blocks(limit: 10) { number hash timestamp } }"}'
 
@@ -146,7 +146,7 @@ cargo run --release
 **Configuration Options:**
 ```bash
 # Database
-PG_DSN="postgres://qsafe:changeme@localhost:5432/res_index"
+PG_DSN="postgresql:///chronicle"
 
 # Blockchain Node
 WS_URL="ws://localhost:9944"
@@ -216,7 +216,7 @@ sudo ./deploy-timescaledb-podman.sh logs
 sudo ./deploy-hasura-podman.sh logs
 
 # Check database content
-psql -h localhost -U qsafe -d res_index
+psql -d chronicle
 
 # Inside psql:
 \dt *.*                    # List all tables in all schemas
@@ -230,8 +230,8 @@ SELECT * FROM "CHAIN_ID".index_progress;  # Check indexing progress
 
 ```bash
 # Connect to database
-psql -h localhost -U qsafe -d res_index
-# Password: changeme
+psql -d chronicle
+# Password: set via environment (e.g., PG_PASSWORD)
 
 # Useful queries
 \l                         # List databases
@@ -247,10 +247,10 @@ psql -h localhost -U qsafe -d res_index
 sudo ./deploy-timescaledb-podman.sh psql
 
 # Backup database
-podman exec qsafe-timescaledb pg_dump -U qsafe res_index > backup.sql
+podman exec chronicle-timescaledb pg_dump chronicle > backup.sql
 
 # Restore database
-cat backup.sql | podman exec -i qsafe-timescaledb psql -U qsafe -d res_index
+cat backup.sql | podman exec -i chronicle-timescaledb psql -d chronicle
 ```
 
 ## Service Management
@@ -268,7 +268,7 @@ sudo ./deploy-timescaledb-podman.sh restart
 sudo ./deploy-timescaledb-podman.sh logs
 
 # Check container
-podman ps -a --filter name=qsafe-timescaledb
+podman ps -a --filter name=chronicle-timescaledb
 ```
 
 ### Hasura Service
@@ -287,7 +287,7 @@ sudo ./deploy-hasura-podman.sh logs
 sudo ./deploy-hasura-podman.sh console
 
 # Check container
-podman ps -a --filter name=qsafe-hasura
+podman ps -a --filter name=chronicle-hasura
 ```
 
 ## Troubleshooting
@@ -334,18 +334,18 @@ pg_isready -h localhost -p 5432
 sudo firewall-cmd --list-all
 
 # Test with psql
-PGPASSWORD=changeme psql -h localhost -U qsafe -d res_index -c "SELECT 1"
+psql -d chronicle -c "SELECT 1"
 ```
 
 ### Permission Issues
 
 ```bash
-# Fix ownership of qsafe directories
-sudo chown -R qsafe:qsafe /var/lib/qsafe
+# Fix ownership of chronicle directories
+sudo chown -R chronicle:chronicle /var/lib/chronicle
 
 # Check lingering is enabled
-loginctl show-user qsafe | grep Linger
-sudo loginctl enable-linger qsafe
+loginctl show-user chronicle | grep Linger
+sudo loginctl enable-linger chronicle
 ```
 
 ### Chronicle Can't Connect
@@ -360,7 +360,7 @@ source test-local.env
 ./test-local.sh test-db
 
 # Check if schema was created
-psql -h localhost -U qsafe -d res_index -c "\dn"
+psql -d chronicle -c "\dn"
 ```
 
 ## Clean Up
@@ -401,21 +401,21 @@ sudo ./deploy-hasura-podman.sh purge
 
 ```bash
 # Connect to database
-psql -h localhost -U qsafe -d res_index
+psql -d chronicle
 
 # Drop specific chain schema
 DROP SCHEMA "CHAIN_ID" CASCADE;
 
 # Or reset entire database
-DROP DATABASE res_index;
-CREATE DATABASE res_index;
+DROP DATABASE chronicle;
+CREATE DATABASE chronicle;
 ```
 
 ## Security Notes
 
-1. **Default Passwords**: Change `changeme` passwords in production!
-   - TimescaleDB: Set via `POSTGRES_PASSWORD` environment variable
-   - Hasura: Set via `HASURA_ADMIN_SECRET` environment variable
+1. **Secrets**: Provide via environment variables; do not hardcode or commit defaults.
+   - TimescaleDB: use `POSTGRES_PASSWORD`
+   - Hasura: use `HASURA_ADMIN_SECRET`
 2. **Network**: By default, listens on all interfaces. Restrict in production.
 3. **User Isolation**: Runs as dedicated `qsafe` user for security.
 4. **Capabilities**: Drops unnecessary capabilities, only keeps required ones.

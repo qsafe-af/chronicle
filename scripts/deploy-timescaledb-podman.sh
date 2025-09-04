@@ -9,15 +9,15 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-QSAFE_USER="qsafe"
-QSAFE_HOME="/var/lib/qsafe"
+QSAFE_USER="chronicle"
+QSAFE_HOME="/var/lib/chronicle"
 QSAFE_UID=9001
 QSAFE_GID=9001
-CONTAINER_NAME="qsafe-timescaledb"
+CONTAINER_NAME="chronicle-timescaledb"
 CONTAINER_IMAGE="docker.io/timescale/timescaledb:latest-pg16"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-changeme}"
+PG_PASSWORD="${PG_PASSWORD:?PG_PASSWORD must be set}"
 DB_DATA_DIR="${QSAFE_HOME}/timescaledb-data"
-SERVICE_NAME="qsafe-timescaledb"
+SERVICE_NAME="chronicle-timescaledb"
 
 # Functions
 log_info() {
@@ -67,7 +67,7 @@ create_qsafe_user() {
             --home-dir ${QSAFE_HOME} \
             --create-home \
             --shell /sbin/nologin \
-            --comment "QSafe service user" \
+            --comment "Chronicle service user" \
             ${QSAFE_USER}
     fi
 
@@ -110,8 +110,8 @@ start_container() {
         --user ${QSAFE_UID}:${QSAFE_GID} \
         --userns keep-id \
         -e POSTGRES_USER=qsafe \
-        -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
-        -e POSTGRES_DB=res_index \
+        -e POSTGRES_PASSWORD=${PG_PASSWORD} \
+        -e POSTGRES_DB=chronicle \
         -e POSTGRES_INITDB_ARGS="--encoding=UTF8 --lc-collate=C --lc-ctype=C" \
         -e TIMESCALEDB_TELEMETRY=off \
         -e TS_TUNE_MAX_CONNS=100 \
@@ -124,7 +124,7 @@ start_container() {
         --memory=2g \
         --memory-reservation=1g \
         --cpus=2 \
-        --health-cmd="pg_isready -U qsafe -d res_index" \
+        --health-cmd="pg_isready -d chronicle" \
         --health-interval=30s \
         --health-timeout=5s \
         --health-retries=3 \
@@ -144,7 +144,7 @@ create_systemd_service() {
 
     cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
-Description=QSafe TimescaleDB Database (Podman)
+Description=Chronicle TimescaleDB Database (Podman)
 After=network-online.target
 Wants=network-online.target
 
@@ -176,7 +176,7 @@ wait_for_database() {
     local attempt=1
 
     while [ $attempt -le $max_attempts ]; do
-        if podman exec ${CONTAINER_NAME} pg_isready -U qsafe -d res_index &>/dev/null; then
+        if podman exec ${CONTAINER_NAME} pg_isready -d chronicle &>/dev/null; then
             log_info "Database is ready!"
             return 0
         fi
@@ -194,21 +194,25 @@ run_init_script() {
     log_info "Initializing database"
 
     # Create initialization SQL
-    cat <<'EOF' | podman exec -i ${CONTAINER_NAME} psql -U qsafe -d res_index || log_warn "Some commands may have failed (normal if re-running)"
+    cat <<EOF | podman exec -i ${CONTAINER_NAME} psql -d chronicle || log_warn "Some commands may have failed (normal if re-running)"
 -- Enable TimescaleDB extension
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- Create chronicle user if it doesn't exist
 DO $$
+DECLARE pw text := '${PG_PASSWORD}';
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_user WHERE usename = 'chronicle') THEN
-        CREATE USER chronicle WITH PASSWORD 'chronicle_password';
+        EXECUTE 'CREATE USER chronicle';
+    END IF;
+    IF pw IS NOT NULL AND length(pw) > 0 THEN
+        EXECUTE 'ALTER USER chronicle WITH PASSWORD ' || quote_literal(pw);
     END IF;
 END
 $$;
 
 -- Grant necessary permissions
-GRANT CREATE ON DATABASE res_index TO chronicle;
+GRANT CREATE ON DATABASE chronicle TO chronicle;
 GRANT ALL ON SCHEMA public TO chronicle;
 
 -- Create a schema for chronicle metadata
@@ -231,7 +235,7 @@ show_status() {
     echo ""
     echo "Database Status:"
     echo "-----------------"
-    if podman exec ${CONTAINER_NAME} pg_isready -U qsafe -d res_index &>/dev/null; then
+    if podman exec ${CONTAINER_NAME} pg_isready -d chronicle &>/dev/null; then
         echo "Database is ready and accepting connections"
     else
         echo "Database is not ready"
@@ -245,18 +249,18 @@ show_status() {
 
 show_connection_info() {
     log_info "================================================================"
-    log_info "QSafe TimescaleDB has been deployed successfully!"
+    log_info "Chronicle TimescaleDB has been deployed successfully!"
     log_info "================================================================"
     log_info ""
     log_info "Connection Information:"
     log_info "  Host: localhost"
     log_info "  Port: 5432"
-    log_info "  Database: res_index"
+    log_info "  Database: chronicle"
     log_info "  Username: qsafe"
-    log_info "  Password: ${POSTGRES_PASSWORD}"
+    # Password intentionally not printed; set via PG_PASSWORD environment variable
     log_info ""
     log_info "Chronicle Connection String:"
-    log_info "  PG_DSN=\"postgres://qsafe:${POSTGRES_PASSWORD}@localhost:5432/res_index\""
+    log_info "  PG_DSN=\"postgresql:///chronicle\""
     log_info ""
     log_info "Container Management:"
     log_info "  Status:  podman ps -a --filter name=${CONTAINER_NAME}"
@@ -267,8 +271,8 @@ show_connection_info() {
     log_info "  Shell:   podman exec -it ${CONTAINER_NAME} bash"
     log_info ""
     log_info "Database Access:"
-    log_info "  psql -h localhost -U qsafe -d res_index"
-    log_info "  podman exec -it ${CONTAINER_NAME} psql -U qsafe -d res_index"
+    log_info "  psql -d chronicle"
+    log_info "  podman exec -it ${CONTAINER_NAME} psql -d chronicle"
     log_info ""
     log_info "Service Management (if installed):"
     log_info "  systemctl status ${SERVICE_NAME}"
@@ -278,7 +282,7 @@ show_connection_info() {
 
 # Main execution
 main() {
-    log_info "Starting QSafe TimescaleDB deployment (Direct Podman)"
+    log_info "Starting Chronicle TimescaleDB deployment (Direct Podman)"
 
     # Checks
     check_root
@@ -340,7 +344,7 @@ case "${1:-deploy}" in
         podman exec -it ${CONTAINER_NAME} bash
         ;;
     psql)
-        podman exec -it ${CONTAINER_NAME} psql -U qsafe -d res_index
+        podman exec -it ${CONTAINER_NAME} psql -d chronicle
         ;;
     remove)
         log_warn "This will stop and remove the container (data will be preserved)"

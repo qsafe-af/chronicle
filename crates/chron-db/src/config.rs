@@ -21,9 +21,7 @@ impl DbConfig {
     /// Create configuration from environment variables
     pub fn from_env() -> Self {
         Self {
-            dsn: env::var("PG_DSN").unwrap_or_else(|_| {
-                "postgres://username:password@127.0.0.1:5432/chain_index".into()
-            }),
+            dsn: env::var("PG_DSN").unwrap_or_else(|_| "postgresql:///chronicle".into()),
             max_connections: env::var("DB_MAX_CONNECTIONS")
                 .ok()
                 .and_then(|s| s.parse().ok())

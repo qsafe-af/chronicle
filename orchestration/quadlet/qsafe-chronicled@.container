@@ -4,13 +4,13 @@ Description=qsafe chronicled (%i)
 [Container]
 Image=ghcr.io/qsafe-af/chronicled:latest
 Environment=CHAIN_ID=%i
-Environment=PG_DSN=postgres://qsafe:password@127.0.0.1:5432/qsafe_chain_index
+Environment=PG_DSN=postgres://chronicle:${PG_PASSWORD}@host.containers.internal:5432/chronicle
 Environment=WS_URL=wss://%i.qsafe.af
 EnvironmentFile=/etc/qsafe/chronicled-%i.env
-Label=app=qsafe-chronicled
+Label=app=chronicle-chronicled
 Label=chain.id=%i
-ContainerName=qsafe-chronicled-%i
-Volume=qsafe-chronicled-%i:/var/lib/qsafe
+ContainerName=chronicle-chronicled-%i
+Volume=chronicle-chronicled-%i:/var/lib/chronicle
 Restart=always
 
 [Install]

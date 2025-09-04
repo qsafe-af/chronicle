@@ -1,10 +1,13 @@
 [Unit]
-Description=qsafe graphql engine
+Description=chronicle graphql engine
 
 [Container]
+ContainerName=chronicle-hasura
 Image=hasura/graphql-engine:v2.39.0
 PublishPort=8080:8080
-Environment=HASURA_GRAPHQL_DATABASE_URL=postgres://qsafe:password@127.0.0.1:5432/qsafe_chain_index
+Volume=chronicle-hasura-metadata:/hasura-metadata
+Volume=chronicle-hasura-migrations:/hasura-migrations
+Environment=HASURA_GRAPHQL_DATABASE_URL=postgres://chronicle:${PG_PASSWORD}@host.containers.internal:5432/chronicle
 Environment=HASURA_GRAPHQL_ENABLE_CONSOLE=true
 Environment=HASURA_GRAPHQL_DEV_MODE=true
 Restart=always

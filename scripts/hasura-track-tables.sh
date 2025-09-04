@@ -11,12 +11,8 @@ NC='\033[0m' # No Color
 
 # Configuration
 HASURA_URL="${HASURA_URL:-http://localhost:8080}"
-HASURA_ADMIN_SECRET="${HASURA_ADMIN_SECRET:-changeme}"
-DB_HOST="${DB_HOST:-localhost}"
-DB_PORT="${DB_PORT:-5432}"
-DB_NAME="${DB_NAME:-res_index}"
-DB_USER="${DB_USER:-qsafe}"
-DB_PASSWORD="${DB_PASSWORD:-changeme}"
+HASURA_ADMIN_SECRET="${HASURA_ADMIN_SECRET:?HASURA_ADMIN_SECRET must be set}"
+DB_NAME="${DB_NAME:-chronicle}"
 
 # Functions
 log_info() {
@@ -77,7 +73,7 @@ list_chain_schemas() {
         ORDER BY s.schema_name;
     "
 
-    PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -t -A -c "${sql}" 2>/dev/null
+    psql -d "${DB_NAME}" -t -A -c "${sql}" 2>/dev/null
 }
 
 get_chain_info() {
@@ -96,7 +92,7 @@ get_chain_info() {
         LIMIT 1;
     "
 
-    local info=$(PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -t -A -F'|' -c "${sql}" 2>/dev/null)
+    local info=$(psql -d "${DB_NAME}" -t -A -F'|' -c "${sql}" 2>/dev/null)
 
     if [ -n "$info" ]; then
         IFS='|' read -r chain_id latest_block blocks_indexed changes_recorded started updated <<< "$info"
@@ -168,7 +164,7 @@ track_chain_tables() {
             );
         "
 
-        local exists=$(PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -t -A -c "${check_sql}" 2>/dev/null)
+        local exists=$(psql -d "${DB_NAME}" -t -A -c "${check_sql}" 2>/dev/null)
 
         if [ "$exists" = "t" ]; then
             track_table "${schema}" "${table}"
@@ -437,7 +433,7 @@ main() {
 
     echo ""
     log_info "Access Hasura Console at: ${HASURA_URL}/console"
-    log_info "Admin Secret: ${HASURA_ADMIN_SECRET}"
+    log_info "Admin Secret is set via HASURA_ADMIN_SECRET"
 }
 
 # Handle script arguments
@@ -453,12 +449,8 @@ case "${1:-}" in
         echo ""
         echo "Environment variables:"
         echo "  HASURA_URL           Hasura endpoint (default: http://localhost:8080)"
-        echo "  HASURA_ADMIN_SECRET  Hasura admin secret (default: changeme)"
-        echo "  DB_HOST              Database host (default: localhost)"
-        echo "  DB_PORT              Database port (default: 5432)"
-        echo "  DB_NAME              Database name (default: res_index)"
-        echo "  DB_USER              Database user (default: qsafe)"
-        echo "  DB_PASSWORD          Database password (default: changeme)"
+        echo "  HASURA_ADMIN_SECRET  Hasura admin secret (required via environment)"
+        echo "  DB_NAME              Database name (default: chronicle)"
         echo ""
         echo "Examples:"
         echo "  # Interactive mode - list all chains and select"

@@ -9,13 +9,13 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-QSAFE_USER="qsafe"
-QSAFE_HOME="/var/lib/qsafe"
+QSAFE_USER="chronicle"
+QSAFE_HOME="/var/lib/chronicle"
 QSAFE_UID=9001
 QSAFE_GID=9001
-QUADLET_NAME="qsafe-timescaledb"
+QUADLET_NAME="chronicle-timescaledb"
 CONTAINER_IMAGE="docker.io/timescale/timescaledb:latest-pg16"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-changeme}"
+PG_PASSWORD="${PG_PASSWORD:?PG_PASSWORD must be set}"
 DB_DATA_DIR="${QSAFE_HOME}/timescaledb-data"
 
 # Functions
@@ -78,7 +78,7 @@ create_qsafe_user() {
             --home-dir ${QSAFE_HOME} \
             --create-home \
             --shell /sbin/nologin \
-            --comment "QSafe service user" \
+            --comment "Chronicle service user" \
             ${QSAFE_USER}
     fi
 
@@ -117,7 +117,7 @@ create_quadlet_file() {
 
     cat > "${quadlet_file}" <<EOF
 [Unit]
-Description=QSafe TimescaleDB Database
+Description=Chronicle TimescaleDB Database
 After=network-online.target
 Wants=network-online.target
 
@@ -131,9 +131,9 @@ User=${QSAFE_UID}
 Group=${QSAFE_GID}
 
 # Database configuration
-Environment=POSTGRES_USER=qsafe
-Environment=POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-Environment=POSTGRES_DB=res_index
+Environment=POSTGRES_USER=chronicle
+Environment=POSTGRES_PASSWORD=${PG_PASSWORD}
+Environment=POSTGRES_DB=chronicle
 Environment=POSTGRES_INITDB_ARGS=--encoding=UTF8 --lc-collate=C --lc-ctype=C
 
 # TimescaleDB configuration
@@ -163,7 +163,7 @@ PublishPort=5432:5432
 Network=bridge
 
 # Health check
-HealthCmd=pg_isready -U qsafe -d res_index
+HealthCmd=pg_isready -d chronicle
 HealthInterval=30s
 HealthTimeout=5s
 HealthRetries=3
@@ -203,21 +203,25 @@ create_init_script() {
 
     log_info "Creating initialization script: ${init_script}"
 
-    cat > "${init_script}" <<'EOF'
+    cat > "${init_script}" <<EOF
 -- Enable TimescaleDB extension
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- Create chronicle user if it doesn't exist
 DO $$
+DECLARE pw text := '${PG_PASSWORD}';
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_user WHERE usename = 'chronicle') THEN
-        CREATE USER chronicle WITH PASSWORD 'chronicle_password';
+        EXECUTE 'CREATE USER chronicle';
+    END IF;
+    IF pw IS NOT NULL AND length(pw) > 0 THEN
+        EXECUTE 'ALTER USER chronicle WITH PASSWORD ' || quote_literal(pw);
     END IF;
 END
 $$;
 
 -- Grant necessary permissions
-GRANT CREATE ON DATABASE res_index TO chronicle;
+GRANT CREATE ON DATABASE chronicle TO chronicle;
 GRANT ALL ON SCHEMA public TO chronicle;
 
 -- Create a schema for chronicle metadata
@@ -350,7 +354,7 @@ wait_for_database() {
             podman ps -a | grep ${QUADLET_NAME} || log_error "Container not found"
         fi
 
-        if podman exec ${QUADLET_NAME} pg_isready -U qsafe -d res_index &>/dev/null; then
+        if podman exec ${QUADLET_NAME} pg_isready -d chronicle &>/dev/null; then
             log_info "Database is ready!"
             return 0
         fi
@@ -371,7 +375,7 @@ run_init_script() {
 
     if [ -f "${init_script}" ]; then
         log_info "Running initialization script"
-        podman exec -i ${QUADLET_NAME} psql -U qsafe -d res_index < "${init_script}" || {
+        podman exec -i ${QUADLET_NAME} psql -d chronicle < "${init_script}" || {
             log_warn "Some initialization commands may have failed (this is normal if re-running)"
         }
     fi
@@ -379,18 +383,18 @@ run_init_script() {
 
 show_connection_info() {
     log_info "================================================================"
-    log_info "QSafe TimescaleDB has been deployed successfully!"
+    log_info "Chronicle TimescaleDB has been deployed successfully!"
     log_info "================================================================"
     log_info ""
     log_info "Connection Information:"
     log_info "  Host: localhost"
     log_info "  Port: 5432"
-    log_info "  Database: res_index"
+    log_info "  Database: chronicle"
     log_info "  Username: qsafe"
-    log_info "  Password: ${POSTGRES_PASSWORD}"
+    log_info "  Password: (set via PG_PASSWORD)"
     log_info ""
     log_info "Chronicle Connection String:"
-    log_info "  PG_DSN=\"postgres://qsafe:${POSTGRES_PASSWORD}@localhost:5432/res_index\""
+    log_info "  PG_DSN=\"postgresql:///chronicle\""
     log_info ""
     log_info "Service Management:"
     log_info "  Status:  systemctl status ${QUADLET_NAME}"
@@ -400,14 +404,14 @@ show_connection_info() {
     log_info "  Logs:    journalctl -u ${QUADLET_NAME} -f"
     log_info ""
     log_info "Database Access:"
-    log_info "  psql -h localhost -U qsafe -d res_index"
-    log_info "  podman exec -it ${QUADLET_NAME} psql -U qsafe -d res_index"
+    log_info "  psql -d chronicle"
+    log_info "  podman exec -it ${QUADLET_NAME} psql -d chronicle"
     log_info ""
 }
 
 # Main execution
 main() {
-    log_info "Starting QSafe TimescaleDB deployment (system-wide)"
+    log_info "Starting Chronicle TimescaleDB deployment (system-wide)"
 
     # Checks
     check_root
@@ -433,8 +437,8 @@ main() {
             --name ${QUADLET_NAME} \
             --user ${QSAFE_UID}:${QSAFE_GID} \
             -e POSTGRES_USER=qsafe \
-            -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
-            -e POSTGRES_DB=res_index \
+            -e POSTGRES_PASSWORD=${PG_PASSWORD} \
+            -e POSTGRES_DB=chronicle \
             -e POSTGRES_INITDB_ARGS="--encoding=UTF8 --lc-collate=C --lc-ctype=C" \
             -v ${DB_DATA_DIR}:/var/lib/postgresql/data:Z \
             -p 5432:5432 \

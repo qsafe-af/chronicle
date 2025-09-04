@@ -21,7 +21,7 @@ Chronicle exclusively indexes quantum-safe chains using NIST-approved signature 
 Each indexed chain gets its own PostgreSQL schema named after the chain ID:
 
 ```
-res_index (database)
+chronicle (database)
 ├── public (default schema)
 ├── FnX4ttSwm8kTZUvUkDbyPYS2... (Resonance schema)
 │   ├── blocks
@@ -65,7 +65,7 @@ After Chronicle has indexed at least one chain:
 
 ### 3. Access Hasura Console
 
-Open http://localhost:8080/console in your browser and enter the admin secret (default: `changeme`).
+Open http://localhost:8080/console in your browser and enter the admin secret (from the HASURA_ADMIN_SECRET environment variable).
 
 ## GraphQL Schema
 
@@ -277,7 +277,7 @@ import bs58 from 'bs58';
 const client = new ApolloClient({
   uri: 'http://localhost:8080/v1/graphql',
   headers: {
-    'X-Hasura-Admin-Secret': 'changeme'
+    'X-Hasura-Admin-Secret': process.env.HASURA_ADMIN_SECRET
   },
   cache: new InMemoryCache()
 });
@@ -411,7 +411,7 @@ query {
 
 1. Ensure Chronicle has indexed the chain:
    ```bash
-   psql -h localhost -U qsafe -d res_index -c "\dn"
+   psql -d chronicle -c "\dn"
    ```
 
 2. Track tables in Hasura:
@@ -422,7 +422,7 @@ query {
 3. Reload Hasura metadata:
    ```bash
    curl -X POST http://localhost:8080/v1/metadata \
-     -H "X-Hasura-Admin-Secret: changeme" \
+     -H "X-Hasura-Admin-Secret: ${HASURA_ADMIN_SECRET}" \
      -H "Content-Type: application/json" \
      -d '{"type": "reload_metadata"}'
    ```
