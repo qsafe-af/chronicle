@@ -597,6 +597,7 @@ impl BalanceDecoder {
 /// This would need to be customized for your specific runtime
 impl BalanceDecoder {
     /// Example of how to decode a Transfer event with known structure
+    #[allow(dead_code)]
     pub fn decode_transfer_manual(
         &self,
         event_bytes: &[u8],

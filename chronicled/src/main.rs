@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 mod balance_decoder;
 
 use anyhow::Result;
